@@ -4,7 +4,10 @@ go 1.24.6
 
 toolchain go1.24.7
 
-require github.com/grafana/grafana-plugin-sdk-go v0.279.0
+require (
+	github.com/grafana/grafana-plugin-sdk-go v0.279.0
+	modernc.org/sqlite v1.39.0
+)
 
 require (
 	github.com/BurntSushi/toml v1.5.0 // indirect
@@ -101,5 +104,4 @@ require (
 	modernc.org/libc v1.66.3 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.39.0 // indirect
 )
