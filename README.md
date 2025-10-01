@@ -29,6 +29,14 @@ App plugins can let you create a custom out-of-the-box monitoring experience by 
    mage -l
    ```
 
+4. Build backend
+
+   ```bash
+    mage -v build:backend
+    ```
+
+- binary added to dist which the docker-compose injects into the grafana container under plugins
+
 ### Frontend
 
 1. Install dependencies
