@@ -2,6 +2,8 @@ package plugin
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"net/http"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
@@ -9,45 +11,46 @@ import (
 	"github.com/grafana/grafana-plugin-sdk-go/backend/resource/httpadapter"
 )
 
-// Make sure App implements required interfaces. This is important to do
-// since otherwise we will only get a not implemented error response from plugin in
-// runtime. Plugin should not implement all these interfaces - only those which are
-// required for a particular task.
-var (
-	_ backend.CallResourceHandler   = (*App)(nil)
-	_ instancemgmt.InstanceDisposer = (*App)(nil)
-	_ backend.CheckHealthHandler    = (*App)(nil)
-)
-
-// App is an example app plugin with a backend which can respond to data queries.
 type App struct {
 	backend.CallResourceHandler
+	db *sql.DB
 }
 
-// NewApp creates a new example *App instance.
+type withContextHandler struct {
+	inner backend.CallResourceHandler
+}
+
+func (h *withContextHandler) CallResource(ctx context.Context, req *backend.CallResourceRequest, sender backend.CallResourceResponseSender) error {
+	ctx = SetPluginContext(ctx, req.PluginContext)
+	return h.inner.CallResource(ctx, req, sender)
+}
+
 func NewApp(_ context.Context, _ backend.AppInstanceSettings) (instancemgmt.Instance, error) {
-	var app App
-
-	// Use a httpadapter (provided by the SDK) for resource calls. This allows us
-	// to use a *http.ServeMux for resource calls, so we can map multiple routes
-	// to CallResource without having to implement extra logic.
+	a := &App{}
+	if err := a.initDatabase(); err != nil {
+		return nil, fmt.Errorf("initDatabase: %w", err)
+	}
 	mux := http.NewServeMux()
-	app.registerRoutes(mux)
-	app.CallResourceHandler = httpadapter.New(mux)
-
-	return &app, nil
+	a.registerRoutes(mux)
+	a.CallResourceHandler = &withContextHandler{inner: httpadapter.New(mux)}
+	return a, nil
 }
 
-// Dispose here tells plugin SDK that plugin wants to clean up resources when a new instance
-// created.
 func (a *App) Dispose() {
-	// cleanup
+	if a.db != nil {
+		_ = a.db.Close()
+		a.db = nil
+	}
 }
 
-// CheckHealth handles health checks sent from Grafana to the plugin.
 func (a *App) CheckHealth(_ context.Context, _ *backend.CheckHealthRequest) (*backend.CheckHealthResult, error) {
-	return &backend.CheckHealthResult{
-		Status:  backend.HealthStatusOk,
-		Message: "ok",
-	}, nil
+	if a.db != nil {
+		if err := a.db.Ping(); err != nil {
+			return &backend.CheckHealthResult{
+				Status:  backend.HealthStatusError,
+				Message: fmt.Sprintf("db ping failed: %v", err),
+			}, nil
+		}
+	}
+	return &backend.CheckHealthResult{Status: backend.HealthStatusOk, Message: "ok"}, nil
 }

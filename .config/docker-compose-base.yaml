@@ -1,18 +1,19 @@
+version: '3'
 services:
   grafana:
     user: root
-    container_name: 'rpatt-assetlog-app'
-
+    container_name: 'grafana-container'
     build:
       context: .
+      dockerfile: Dockerfile
       args:
         grafana_image: ${GRAFANA_IMAGE:-grafana-enterprise}
         grafana_version: ${GRAFANA_VERSION:-12.2.0}
         development: ${DEVELOPMENT:-false}
         anonymous_auth_enabled: ${ANONYMOUS_AUTH_ENABLED:-true}
     ports:
-      - 3000:3000/tcp
-      - 2345:2345/tcp # delve
+      - "3000:3000/tcp"
+      - "2345:2345/tcp" # delve
     security_opt:
       - 'apparmor:unconfined'
       - 'seccomp:unconfined'
@@ -22,10 +23,13 @@ services:
       - ../dist:/var/lib/grafana/plugins/rpatt-assetlog-app
       - ../provisioning:/etc/grafana/provisioning
       - ..:/root/rpatt-assetlog-app
-
+      - ../data:/var/lib/rpatt-assetlog-app
+      - ./grafana.ini:/etc/grafana/grafana.ini        # Mount grafana.ini into the container
+      - grafana-storage:/var/lib/grafana             # Persistent volume for Grafana DB
     environment:
       NODE_ENV: development
       GF_LOG_FILTERS: plugin.rpatt-assetlog-app:debug
       GF_LOG_LEVEL: debug
       GF_DATAPROXY_LOGGING: 1
       GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: rpatt-assetlog-app
+      GRAFANA_URL: http://localhost:3000
