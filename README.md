@@ -20,8 +20,11 @@ App plugins can let you create a custom out-of-the-box monitoring experience by 
 2. Build plugin backend binaries for Linux, Windows and Darwin:
 
    ```bash
-   mage -v
+   mage -v build:backend
    ```
+
+   Get mage with: `go install github.com/magefile/mage@latest`
+   Add to PATH: `export PATH="$PATH:$(go env GOPATH)/bin"`
 
 3. List all available Mage targets for additional commands:
 
