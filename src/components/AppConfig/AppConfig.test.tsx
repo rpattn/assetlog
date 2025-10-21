@@ -24,7 +24,7 @@ describe('Components/AppConfig', () => {
     } as unknown as AppConfigProps;
   });
 
-  test('renders the "API Settings" fieldset with API key, API url inputs and button', () => {
+  test('renders configuration fieldsets with expected inputs', () => {
     const plugin = { meta: { ...props.plugin.meta, enabled: false } };
 
     // @ts-ignore - We don't need to provide `addConfigPage()` and `setChannelSupport()` for these tests
@@ -33,6 +33,11 @@ describe('Components/AppConfig', () => {
     expect(screen.queryByRole('group', { name: /api settings/i })).toBeInTheDocument();
     expect(screen.queryByTestId(testIds.appConfig.apiKey)).toBeInTheDocument();
     expect(screen.queryByTestId(testIds.appConfig.apiUrl)).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: /storage settings/i })).toBeInTheDocument();
+    expect(screen.queryByTestId(testIds.appConfig.bucketName)).toBeInTheDocument();
+    expect(screen.queryByTestId(testIds.appConfig.objectPrefix)).toBeInTheDocument();
+    expect(screen.queryByTestId(testIds.appConfig.maxUploadSize)).toBeInTheDocument();
+    expect(screen.queryByTestId(testIds.appConfig.serviceAccount)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /save api settings/i })).toBeInTheDocument();
   });
 });

@@ -2,6 +2,10 @@ export const testIds = {
   appConfig: {
     apiKey: 'data-testid ac-api-key',
     apiUrl: 'data-testid ac-api-url',
+    bucketName: 'data-testid ac-bucket-name',
+    objectPrefix: 'data-testid ac-object-prefix',
+    maxUploadSize: 'data-testid ac-max-upload-size',
+    serviceAccount: 'data-testid ac-service-account',
     submit: 'data-testid ac-submit-form',
   },
   pageOne: {
