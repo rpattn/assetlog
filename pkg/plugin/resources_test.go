@@ -3,9 +3,12 @@ package plugin
 import (
 	"bytes"
 	"context"
-	"github.com/grafana/grafana-plugin-sdk-go/backend"
+	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"testing"
+
+	"github.com/grafana/grafana-plugin-sdk-go/backend"
 )
 
 // mockCallResourceResponseSender implements backend.CallResourceResponseSender
@@ -23,6 +26,8 @@ func (s *mockCallResourceResponseSender) Send(response *backend.CallResourceResp
 // TestCallResource tests CallResource calls, using backend.CallResourceRequest and backend.CallResourceResponse.
 // This ensures the httpadapter for CallResource works correctly.
 func TestCallResource(t *testing.T) {
+	t.Setenv("SQLITE_PATH", filepath.Join(t.TempDir(), "assets.db"))
+
 	// Initialize app
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{})
 	if err != nil {
@@ -40,12 +45,14 @@ func TestCallResource(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 
-		method string
-		path   string
-		body   []byte
+		method        string
+		path          string
+		body          []byte
+		pluginContext backend.PluginContext
 
 		expStatus int
 		expBody   []byte
+		verify    func(t *testing.T, resp *backend.CallResourceResponse)
 	}{
 		{
 			name:      "get ping 200",
@@ -68,6 +75,28 @@ func TestCallResource(t *testing.T) {
 			expBody:   []byte(`{"message":"ok"}`),
 		},
 		{
+			name:          "get assets 200",
+			method:        http.MethodGet,
+			path:          "assets",
+			pluginContext: backend.PluginContext{OrgID: 1},
+			expStatus:     http.StatusOK,
+			verify: func(t *testing.T, resp *backend.CallResourceResponse) {
+				t.Helper()
+				var payload struct {
+					Data []AssetRecord `json:"data"`
+				}
+				if err := json.Unmarshal(resp.Body, &payload); err != nil {
+					t.Fatalf("decode response: %v", err)
+				}
+				if len(payload.Data) == 0 {
+					t.Fatalf("expected seeded assets, got none")
+				}
+				if payload.Data[0].CreatedAt == "" {
+					t.Fatalf("expected created_at to be populated")
+				}
+			},
+		},
+		{
 			name:      "get non existing handler 404",
 			method:    http.MethodGet,
 			path:      "not_found",
@@ -78,9 +107,10 @@ func TestCallResource(t *testing.T) {
 			// Request by calling CallResource. This tests the httpadapter.
 			var r mockCallResourceResponseSender
 			err = app.CallResource(context.Background(), &backend.CallResourceRequest{
-				Method: tc.method,
-				Path:   tc.path,
-				Body:   tc.body,
+				Method:        tc.method,
+				Path:          tc.path,
+				Body:          tc.body,
+				PluginContext: tc.pluginContext,
 			}, &r)
 			if err != nil {
 				t.Fatalf("CallResource error: %s", err)
@@ -95,6 +125,9 @@ func TestCallResource(t *testing.T) {
 				if tb := bytes.TrimSpace(r.response.Body); !bytes.Equal(tb, tc.expBody) {
 					t.Errorf("response body should be %s, got %s", tc.expBody, tb)
 				}
+			}
+			if tc.verify != nil {
+				tc.verify(t, r.response)
 			}
 		})
 	}
