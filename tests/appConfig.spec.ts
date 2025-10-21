@@ -10,6 +10,10 @@ test('should be possible to save app configuration', async ({ appConfigPage, pag
   await page.getByRole('textbox', { name: 'API Key' }).fill('secret-api-key');
   await page.getByRole('textbox', { name: 'API Url' }).clear();
   await page.getByRole('textbox', { name: 'API Url' }).fill('http://www.my-awsome-grafana-app.com/api');
+  await page.getByTestId('data-testid ac-bucket-name').fill('assetlog-bucket');
+  await page.getByTestId('data-testid ac-object-prefix').fill('uploads/org-1/');
+  await page.getByTestId('data-testid ac-max-upload-size').fill('100');
+  await page.getByTestId('data-testid ac-service-account').fill('{"type":"service_account"}');
 
   // listen for the server response on the saved form
   const saveResponse = appConfigPage.waitForSettingsResponse();

@@ -14,6 +14,8 @@ import (
 type App struct {
 	backend.CallResourceHandler
 	db *sql.DB
+	// config stores the current plugin configuration for reuse by handlers.
+	config Config
 }
 
 type withContextHandler struct {
@@ -25,8 +27,12 @@ func (h *withContextHandler) CallResource(ctx context.Context, req *backend.Call
 	return h.inner.CallResource(ctx, req, sender)
 }
 
-func NewApp(_ context.Context, _ backend.AppInstanceSettings) (instancemgmt.Instance, error) {
-	a := &App{}
+func NewApp(_ context.Context, settings backend.AppInstanceSettings) (instancemgmt.Instance, error) {
+	cfg, err := parseConfig(settings)
+	if err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	a := &App{config: cfg}
 	if err := a.initDatabase(); err != nil {
 		return nil, fmt.Errorf("initDatabase: %w", err)
 	}
@@ -52,5 +58,18 @@ func (a *App) CheckHealth(_ context.Context, _ *backend.CheckHealthRequest) (*ba
 			}, nil
 		}
 	}
-	return &backend.CheckHealthResult{Status: backend.HealthStatusOk, Message: "ok"}, nil
+	status := backend.HealthStatusOk
+	message := "ok"
+	switch {
+	case a.config.Storage.Bucket == "" && len(a.config.Storage.ServiceAccountJSON) == 0:
+		status = backend.HealthStatusError
+		message = "storage bucket and service account not configured"
+	case a.config.Storage.Bucket == "":
+		status = backend.HealthStatusError
+		message = "storage bucket not configured"
+	case len(a.config.Storage.ServiceAccountJSON) == 0:
+		status = backend.HealthStatusError
+		message = "storage service account not configured"
+	}
+	return &backend.CheckHealthResult{Status: status, Message: message}, nil
 }
