@@ -91,6 +91,90 @@ func TestNewAppUsesPersistedSettingsWhenGrafanaResets(t *testing.T) {
 	}
 }
 
+func TestNewAppUpdatesPersistedSettingsWithGrafanaChanges(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "assets.db")
+	t.Setenv("SQLITE_PATH", dbPath)
+	t.Setenv(envForceLocalStorage, "1")
+
+	orgID := int64(23)
+	serviceAccount := `{"client_email":"svc@example.com","private_key":"-----BEGIN PRIVATE KEY-----\nABC\n-----END PRIVATE KEY-----\n"}`
+
+	ctx := backend.WithPluginContext(context.Background(), backend.PluginContext{OrgID: orgID})
+	initial := backend.AppInstanceSettings{
+		JSONData: []byte(`{"apiUrl":"https://initial.example","bucketName":"initial-bucket","objectPrefix":"initial/","maxUploadSizeMb":16}`),
+		DecryptedSecureJSONData: map[string]string{
+			"apiKey":            "initial-key",
+			"gcsServiceAccount": serviceAccount,
+		},
+		Updated: time.Now().UTC(),
+	}
+
+	inst, err := NewApp(ctx, initial)
+	if err != nil {
+		t.Fatalf("initial NewApp returned error: %v", err)
+	}
+	app := inst.(*App)
+	app.Dispose()
+
+	updatedCtx := backend.WithPluginContext(context.Background(), backend.PluginContext{OrgID: orgID})
+	updated := backend.AppInstanceSettings{
+		JSONData: []byte(`{"apiUrl":"https://updated.example","bucketName":"updated-bucket","objectPrefix":"updated/","maxUploadSizeMb":128}`),
+		DecryptedSecureJSONData: map[string]string{
+			"apiKey": "updated-key",
+		},
+		Updated: time.Now().UTC().Add(time.Minute),
+	}
+
+	inst2, err := NewApp(updatedCtx, updated)
+	if err != nil {
+		t.Fatalf("updated NewApp returned error: %v", err)
+	}
+	app2 := inst2.(*App)
+	defer app2.Dispose()
+
+	if app2.config.APIURL != "https://updated.example" {
+		t.Fatalf("expected updated API URL, got %q", app2.config.APIURL)
+	}
+	if app2.config.Storage.Bucket != "updated-bucket" {
+		t.Fatalf("expected updated bucket, got %q", app2.config.Storage.Bucket)
+	}
+	if app2.config.APIKey != "updated-key" {
+		t.Fatalf("expected updated API key, got %q", app2.config.APIKey)
+	}
+	if string(app2.config.Storage.ServiceAccountJSON) != serviceAccount {
+		t.Fatalf("expected service account to be preserved, got %q", string(app2.config.Storage.ServiceAccountJSON))
+	}
+
+	persisted, err := app2.loadPersistedAppSettings(context.Background(), orgID)
+	if err != nil {
+		t.Fatalf("loadPersistedAppSettings returned error: %v", err)
+	}
+	if persisted == nil {
+		t.Fatalf("expected persisted settings to exist")
+	}
+
+	persistedCfg, err := parseConfig(backend.AppInstanceSettings{
+		JSONData:                persisted.JSONData,
+		DecryptedSecureJSONData: persisted.SecureJSONData,
+	})
+	if err != nil {
+		t.Fatalf("parse persisted config failed: %v", err)
+	}
+
+	if persistedCfg.APIURL != "https://updated.example" {
+		t.Fatalf("expected persisted API URL to be updated, got %q", persistedCfg.APIURL)
+	}
+	if persistedCfg.Storage.Bucket != "updated-bucket" {
+		t.Fatalf("expected persisted bucket to be updated, got %q", persistedCfg.Storage.Bucket)
+	}
+	if persistedCfg.APIKey != "updated-key" {
+		t.Fatalf("expected persisted API key to be updated, got %q", persistedCfg.APIKey)
+	}
+	if string(persistedCfg.Storage.ServiceAccountJSON) != serviceAccount {
+		t.Fatalf("expected persisted service account to be preserved, got %q", string(persistedCfg.Storage.ServiceAccountJSON))
+	}
+}
+
 func TestNewAppHandlesStorageInitErrorsGracefully(t *testing.T) {
 	t.Setenv("SQLITE_PATH", filepath.Join(t.TempDir(), "assets.db"))
 	// Ensure local storage override is disabled for this test.

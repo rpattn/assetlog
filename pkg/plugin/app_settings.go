@@ -91,3 +91,45 @@ func (a *App) savePersistedAppSettings(ctx context.Context, orgID int64, setting
 	}
 	return nil
 }
+
+func mergeAppInstanceSettings(settings backend.AppInstanceSettings, persisted *persistedAppSettings) backend.AppInstanceSettings {
+	merged := backend.AppInstanceSettings{
+		JSONData:                append([]byte(nil), settings.JSONData...),
+		DecryptedSecureJSONData: copyStringMap(settings.DecryptedSecureJSONData),
+		Updated:                 settings.Updated,
+		APIVersion:              settings.APIVersion,
+	}
+
+	if persisted == nil {
+		return merged
+	}
+
+	if len(merged.JSONData) == 0 && len(persisted.JSONData) > 0 {
+		merged.JSONData = append([]byte(nil), persisted.JSONData...)
+	}
+
+	if len(persisted.SecureJSONData) > 0 {
+		if len(merged.DecryptedSecureJSONData) == 0 {
+			merged.DecryptedSecureJSONData = copyStringMap(persisted.SecureJSONData)
+		} else {
+			for k, v := range persisted.SecureJSONData {
+				if _, exists := merged.DecryptedSecureJSONData[k]; !exists {
+					merged.DecryptedSecureJSONData[k] = v
+				}
+			}
+		}
+	}
+
+	return merged
+}
+
+func copyStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}

@@ -47,22 +47,26 @@ func NewApp(ctx context.Context, settings backend.AppInstanceSettings) (instance
 		if err != nil {
 			log.Printf("load persisted app settings for org %d failed: %v", pluginCtx.OrgID, err)
 		} else if persisted != nil {
-			persistedCfg, parseErr := parseConfig(backend.AppInstanceSettings{
-				JSONData:                persisted.JSONData,
-				DecryptedSecureJSONData: persisted.SecureJSONData,
-			})
-			if parseErr != nil {
-				log.Printf("parse persisted app settings for org %d failed: %v", pluginCtx.OrgID, parseErr)
-			} else {
-				cfg = persistedCfg
-				log.Printf("loaded persisted app settings for org %d", pluginCtx.OrgID)
-			}
+			log.Printf("loaded persisted app settings for org %d", pluginCtx.OrgID)
+		}
+
+		merged := mergeAppInstanceSettings(settings, persisted)
+		mergedCfg, parseErr := parseConfig(backend.AppInstanceSettings{
+			JSONData:                merged.JSONData,
+			DecryptedSecureJSONData: merged.DecryptedSecureJSONData,
+		})
+		if parseErr != nil {
+			log.Printf("parse merged app settings for org %d failed: %v", pluginCtx.OrgID, parseErr)
 		} else {
-			if err := a.savePersistedAppSettings(ctx, pluginCtx.OrgID, settings); err != nil {
-				log.Printf("persist default app settings for org %d failed: %v", pluginCtx.OrgID, err)
-			} else {
-				log.Printf("persisted default app settings for org %d", pluginCtx.OrgID)
-			}
+			cfg = mergedCfg
+		}
+
+		if err := a.savePersistedAppSettings(ctx, pluginCtx.OrgID, merged); err != nil {
+			log.Printf("persist app settings for org %d failed: %v", pluginCtx.OrgID, err)
+		} else if persisted == nil {
+			log.Printf("persisted app settings for org %d", pluginCtx.OrgID)
+		} else {
+			log.Printf("updated persisted app settings for org %d", pluginCtx.OrgID)
 		}
 	}
 
