@@ -42,7 +42,10 @@ func NewApp(ctx context.Context, settings backend.AppInstanceSettings) (instance
 	}
 
 	pluginCtx := backend.PluginConfigFromContext(ctx)
-	var persisted *persistedAppSettings
+	var (
+		persisted *persistedAppSettings
+		prefer    bool
+	)
 	if pluginCtx.OrgID != 0 {
 		if persisted, err = a.loadPersistedAppSettings(ctx, pluginCtx.OrgID); err != nil {
 			log.Printf("load persisted app settings failed: %v", err)
@@ -54,11 +57,11 @@ func NewApp(ctx context.Context, settings backend.AppInstanceSettings) (instance
 			if parseErr != nil {
 				log.Printf("parse persisted app settings failed: %v", parseErr)
 			} else {
-				prefer := shouldPreferPersistedSettings(settings, persisted)
+				prefer = shouldPreferPersistedSettings(settings, persisted)
 				cfg = mergeConfigWithPersisted(cfg, persistedCfg, prefer)
 			}
 		}
-		if err := a.persistAppInstanceSettings(ctx, pluginCtx.OrgID, settings, persisted); err != nil {
+		if err := a.persistAppInstanceSettings(ctx, pluginCtx.OrgID, settings, persisted, prefer); err != nil {
 			log.Printf("persist app settings failed: %v", err)
 		}
 	}

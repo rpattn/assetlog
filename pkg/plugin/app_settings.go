@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -92,16 +93,20 @@ func (a *App) savePersistedAppSettings(ctx context.Context, orgID int64, setting
 	return nil
 }
 
-func (a *App) persistAppInstanceSettings(ctx context.Context, orgID int64, settings backend.AppInstanceSettings, existing *persistedAppSettings) error {
+func (a *App) persistAppInstanceSettings(ctx context.Context, orgID int64, settings backend.AppInstanceSettings, existing *persistedAppSettings, preferPersisted bool) error {
 	if a.db == nil || orgID == 0 {
 		return nil
 	}
 
 	if existing != nil {
-		// When Grafana starts with stale defaults, prefer the already persisted settings unless
-		// the incoming payload is strictly newer (Grafana updates Updated timestamps on save)
-		// or carries fresh secret values we should store.
-		if len(settings.DecryptedSecureJSONData) == 0 && shouldPreferPersistedSettings(settings, existing) {
+		hasSecrets := len(settings.DecryptedSecureJSONData) > 0
+		if preferPersisted && !hasSecrets {
+			// Nothing new to store—keep the existing copy.
+			return nil
+		}
+
+		if !hasSecrets && jsonDataMatches(existing.JSONData, settings.JSONData) {
+			// Incoming JSON matches what we already have on disk, so avoid a no-op write.
 			return nil
 		}
 	}
@@ -114,7 +119,11 @@ func (a *App) persistAppInstanceSettings(ctx context.Context, orgID int64, setti
 	}
 
 	if existing != nil {
-		if len(merged.JSONData) == 0 && len(existing.JSONData) > 0 {
+		if preferPersisted {
+			if len(existing.JSONData) > 0 {
+				merged.JSONData = append([]byte(nil), existing.JSONData...)
+			}
+		} else if len(merged.JSONData) == 0 && len(existing.JSONData) > 0 {
 			merged.JSONData = append([]byte(nil), existing.JSONData...)
 		}
 
@@ -149,6 +158,28 @@ func copyStringMap(src map[string]string) map[string]string {
 		dst[k] = v
 	}
 	return dst
+}
+
+func jsonDataMatches(existing, incoming []byte) bool {
+	existing = bytes.TrimSpace(existing)
+	incoming = bytes.TrimSpace(incoming)
+
+	if len(existing) == 0 && len(incoming) == 0 {
+		return true
+	}
+	if len(existing) == 0 || len(incoming) == 0 {
+		return false
+	}
+
+	var canonicalExisting, canonicalIncoming bytes.Buffer
+	if err := json.Compact(&canonicalExisting, existing); err != nil {
+		return false
+	}
+	if err := json.Compact(&canonicalIncoming, incoming); err != nil {
+		return false
+	}
+
+	return bytes.Equal(canonicalExisting.Bytes(), canonicalIncoming.Bytes())
 }
 
 func shouldPreferPersistedSettings(settings backend.AppInstanceSettings, persisted *persistedAppSettings) bool {

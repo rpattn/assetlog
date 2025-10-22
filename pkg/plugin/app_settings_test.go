@@ -259,3 +259,64 @@ func TestPersistedSettingsNotOverwrittenWhenGrafanaProvidesDefaults(t *testing.T
 		t.Fatalf("expected persisted secure JSON to remain populated")
 	}
 }
+
+func TestPersistedSettingsRetainedWhenDefaultsIncludeSecrets(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "assets.db")
+	t.Setenv("SQLITE_PATH", dbPath)
+	t.Setenv(envForceLocalStorage, "1")
+
+	orgID := int64(812)
+	baseTime := time.Now().UTC().Add(-time.Hour)
+	ctx := backend.WithPluginContext(context.Background(), backend.PluginContext{OrgID: orgID})
+
+	initialSettings := backend.AppInstanceSettings{
+		JSONData: []byte(`{"apiUrl":"https://persisted","bucketName":"persisted-bucket","objectPrefix":"org/","maxUploadSizeMb":64}`),
+		DecryptedSecureJSONData: map[string]string{
+			"apiKey":            "initial-secret",
+			"gcsServiceAccount": `{"client_email":"persisted@example.com","private_key":"-----BEGIN PRIVATE KEY-----\nABC\n-----END PRIVATE KEY-----\n"}`,
+		},
+		Updated: baseTime,
+	}
+
+	inst, err := NewApp(ctx, initialSettings)
+	if err != nil {
+		t.Fatalf("NewApp returned error: %v", err)
+	}
+	app := inst.(*App)
+	app.Dispose()
+
+	restartCtx := backend.WithPluginContext(context.Background(), backend.PluginContext{OrgID: orgID})
+	// Grafana can restart the plugin with defaults while still providing secure fields
+	// that mirror what is already stored. Ensure those defaults do not overwrite the
+	// persisted JSON configuration when that happens.
+	defaultSettings := backend.AppInstanceSettings{
+		JSONData: []byte(`{"apiUrl":"https://default","bucketName":"","objectPrefix":"","maxUploadSizeMb":25}`),
+		DecryptedSecureJSONData: map[string]string{
+			"apiKey":            "initial-secret",
+			"gcsServiceAccount": `{"client_email":"persisted@example.com","private_key":"-----BEGIN PRIVATE KEY-----\nABC\n-----END PRIVATE KEY-----\n"}`,
+		},
+		Updated: baseTime,
+	}
+
+	inst2, err := NewApp(restartCtx, defaultSettings)
+	if err != nil {
+		t.Fatalf("NewApp with defaults returned error: %v", err)
+	}
+	app2 := inst2.(*App)
+	defer app2.Dispose()
+
+	if app2.config.APIURL != "https://persisted" {
+		t.Fatalf("expected API URL from persisted settings, got %q", app2.config.APIURL)
+	}
+
+	persisted, err := app2.loadPersistedAppSettings(context.Background(), orgID)
+	if err != nil {
+		t.Fatalf("loadPersistedAppSettings returned error: %v", err)
+	}
+	if persisted == nil {
+		t.Fatalf("expected persisted settings to exist")
+	}
+	if !strings.Contains(string(persisted.JSONData), "https://persisted") {
+		t.Fatalf("expected persisted JSON to keep stored API URL, got %s", persisted.JSONData)
+	}
+}
