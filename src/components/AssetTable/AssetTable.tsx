@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { css, cx } from '@emotion/css';
 import { GrafanaTheme2, SelectableValue } from '@grafana/data';
 import { useStyles2, Button, Input, Pagination, Select } from '@grafana/ui';
@@ -88,12 +89,58 @@ export const AssetTable = ({
   const showPagination = Boolean(onPageChange);
 
   const [activeFilter, setActiveFilter] = useState<{ key: FilterKey; button: HTMLButtonElement | null } | null>(null);
+  const [filterPosition, setFilterPosition] = useState<{ top: number; left: number } | null>(null);
+  const [filterPlacement, setFilterPlacement] = useState<'above' | 'below'>('below');
   const popoverRef = useRef<HTMLDivElement | null>(null);
 
   const filterOptions = useMemo(
     () => buildFilterOptions(assets, filterValues),
     [assets, filterValues]
   );
+
+  const updateFilterPosition = useCallback(() => {
+    const button = activeFilter?.button;
+    const popover = popoverRef.current;
+
+    if (!button || !popover) {
+      return;
+    }
+
+    const margin = 8;
+    const buttonRect = button.getBoundingClientRect();
+    const popoverRect = popover.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+
+    let top = buttonRect.bottom + margin;
+    let placement: 'above' | 'below' = 'below';
+    const maxTop = Math.max(margin, viewportHeight - margin - popoverRect.height);
+
+    if (top > maxTop && buttonRect.top - margin - popoverRect.height >= margin) {
+      top = Math.max(margin, buttonRect.top - margin - popoverRect.height);
+      placement = 'above';
+    } else {
+      top = Math.min(top, maxTop);
+    }
+
+    const maxLeft = Math.max(margin, viewportWidth - margin - popoverRect.width);
+    let left = buttonRect.left;
+
+    if (left > maxLeft) {
+      left = Math.max(margin, buttonRect.right - popoverRect.width);
+    }
+
+    left = Math.min(left, maxLeft);
+    left = Math.max(left, margin);
+
+    setFilterPlacement((prev) => (prev === placement ? prev : placement));
+    setFilterPosition((prev) => {
+      if (prev && Math.abs(prev.top - top) < 0.5 && Math.abs(prev.left - left) < 0.5) {
+        return prev;
+      }
+      return { top, left };
+    });
+  }, [activeFilter]);
 
   const handleFilterButtonClick = useCallback(
     (key: FilterKey, button: HTMLButtonElement | null) => {
@@ -113,6 +160,8 @@ export const AssetTable = ({
   const closeActiveFilter = useCallback(() => {
     popoverRef.current = null;
     setActiveFilter(null);
+    setFilterPosition(null);
+    setFilterPlacement('below');
   }, []);
 
   const handleFilterApply = useCallback(
@@ -137,6 +186,7 @@ export const AssetTable = ({
     if (!activeFilter) {
       return;
     }
+    updateFilterPosition();
     const handleClick = (event: MouseEvent) => {
       const target = event.target as Node;
       if (popoverRef.current && popoverRef.current.contains(target)) {
@@ -151,7 +201,7 @@ export const AssetTable = ({
     return () => {
       document.removeEventListener('mousedown', handleClick);
     };
-  }, [activeFilter, closeActiveFilter]);
+  }, [activeFilter, closeActiveFilter, updateFilterPosition]);
 
   useEffect(() => {
     if (!activeFilter) {
@@ -168,6 +218,27 @@ export const AssetTable = ({
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [activeFilter, closeActiveFilter]);
+
+  useEffect(() => {
+    if (!activeFilter) {
+      popoverRef.current = null;
+      setFilterPosition(null);
+      setFilterPlacement('below');
+      return;
+    }
+
+    setFilterPosition(null);
+    setFilterPlacement('below');
+
+    const handleResize = () => updateFilterPosition();
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('scroll', handleResize, true);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('scroll', handleResize, true);
+    };
+  }, [activeFilter, updateFilterPosition]);
 
   const pageSizeChoices = useMemo(() => {
     const sizes = pageSizeOptions && pageSizeOptions.length > 0 ? pageSizeOptions : DEFAULT_PAGE_SIZES;
@@ -222,6 +293,7 @@ export const AssetTable = ({
       }
       const isActive = Boolean(filterValues[key]?.length);
       const isOpen = activeFilter?.key === key;
+      const isFilterOpen = isOpen && typeof document !== 'undefined';
       return (
         <div className={styles.headerContent}>
           <span className={styles.headerLabel}>{label}</span>
@@ -230,38 +302,56 @@ export const AssetTable = ({
             variant="secondary"
             size="sm"
             icon="filter"
-            className={cx(styles.filterButton, isActive && styles.filterButtonActive)}
+            className={cx(
+              styles.filterButton,
+              (isActive || isOpen) && styles.filterButtonActive
+            )}
             title={`Filter ${label}`}
             aria-pressed={isOpen || isActive}
             aria-haspopup="dialog"
             onClick={(event) => handleFilterButtonClick(key, event.currentTarget)}
           />
-          {isOpen && (
-            <FilterMenu
-              key={key}
-              ref={(element) => {
-                popoverRef.current = element;
-              }}
-              label={label}
-              options={filterOptions[key] ?? []}
-              selectedValues={filterValues[key]}
-              onApply={(values) => handleFilterApply(key, values)}
-              onClose={closeActiveFilter}
-              styles={styles}
-            />
-          )}
+          {isFilterOpen &&
+            createPortal(
+              <FilterMenu
+                key={key}
+                ref={(element) => {
+                  popoverRef.current = element;
+                  if (element) {
+                    updateFilterPosition();
+                  }
+                }}
+                label={label}
+                options={filterOptions[key] ?? []}
+                selectedValues={filterValues[key]}
+                onApply={(values) => handleFilterApply(key, values)}
+                onClose={closeActiveFilter}
+                styles={styles}
+                placement={filterPlacement}
+                style={
+                  filterPosition
+                    ? { top: filterPosition.top, left: filterPosition.left }
+                    : { visibility: 'hidden', pointerEvents: 'none' }
+                }
+                onReposition={updateFilterPosition}
+              />,
+              document.body
+            )}
         </div>
       );
     },
     [
       activeFilter,
       closeActiveFilter,
+      filterPlacement,
+      filterPosition,
       filterOptions,
       filterValues,
       handleFilterApply,
       handleFilterButtonClick,
       showFilters,
       styles,
+      updateFilterPosition,
     ]
   );
 
@@ -464,10 +554,13 @@ type FilterMenuProps = {
   onApply: (values: string[] | null) => void;
   onClose: () => void;
   styles: Styles;
+  placement: 'above' | 'below';
+  style?: React.CSSProperties;
+  onReposition?: () => void;
 };
 
 const FilterMenu = React.forwardRef<HTMLDivElement, FilterMenuProps>(
-  ({ label, options, selectedValues, onApply, onClose, styles }, ref) => {
+  ({ label, options, selectedValues, onApply, onClose, styles, placement, style, onReposition }, ref) => {
     const [search, setSearch] = useState('');
     const [pending, setPending] = useState<string[] | null>(
       selectedValues ? [...selectedValues] : null
@@ -475,6 +568,10 @@ const FilterMenu = React.forwardRef<HTMLDivElement, FilterMenuProps>(
     const searchRef = useRef<HTMLInputElement | null>(null);
     const selectAllRef = useRef<HTMLInputElement | null>(null);
     const debouncedSearch = useDebouncedValue(search, 200);
+
+    useLayoutEffect(() => {
+      onReposition?.();
+    });
 
     useEffect(() => {
       setSearch('');
@@ -551,8 +648,17 @@ const FilterMenu = React.forwardRef<HTMLDivElement, FilterMenuProps>(
       setSearch('');
     };
 
+    const placementClass =
+      placement === 'above' ? styles.filterPopoverAbove : styles.filterPopoverBelow;
+
     return (
-      <div className={styles.filterPopover} ref={ref} role="dialog" aria-label={`Filter ${label}`}>
+      <div
+        className={cx(styles.filterPopover, placementClass)}
+        ref={ref}
+        role="dialog"
+        aria-label={`Filter ${label}`}
+        style={style}
+      >
         <div className={styles.filterHeader}>
           <div className={styles.filterTitle}>Filter {label}</div>
         </div>
@@ -731,13 +837,22 @@ function isImageAttachment(file: AssetFile): boolean {
 const getStyles = (theme: GrafanaTheme2) => {
   const border = `1px solid ${theme.colors.border.weak}`;
   const filterButton = css`
-    opacity: 1;
-    pointer-events: auto;
+    opacity: 0;
+    pointer-events: none;
     transition: opacity 0.15s ease-in-out;
     min-width: 0;
+
+    &:focus,
+    &:focus-visible,
+    &:hover {
+      opacity: 1;
+      pointer-events: auto;
+    }
   `;
 
   const filterButtonActive = css`
+    opacity: 1;
+    pointer-events: auto;
     background: ${theme.colors.action.hover};
     color: ${theme.colors.text.maxContrast};
   `;
@@ -827,6 +942,12 @@ const getStyles = (theme: GrafanaTheme2) => {
       display: flex;
       align-items: center;
       gap: ${theme.spacing(0.5)};
+
+      &:hover .${filterButton},
+      &:focus-within .${filterButton} {
+        opacity: 1;
+        pointer-events: auto;
+      }
     `,
     headerLabel: css`
       flex: 1 1 auto;
@@ -837,9 +958,9 @@ const getStyles = (theme: GrafanaTheme2) => {
     filterButton,
     filterButtonActive,
     filterPopover: css`
-      position: absolute;
-      top: calc(100% - ${theme.spacing(0.5)});
-      right: 0;
+      position: fixed;
+      top: 0;
+      left: 0;
       min-width: 260px;
       max-width: 320px;
       background: ${theme.colors.background.primary};
@@ -847,7 +968,13 @@ const getStyles = (theme: GrafanaTheme2) => {
       border-radius: 4px;
       box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
       padding: ${theme.spacing(1)};
-      z-index: 10;
+      z-index: 1100;
+    `,
+    filterPopoverBelow: css`
+      transform-origin: top right;
+    `,
+    filterPopoverAbove: css`
+      transform-origin: bottom right;
     `,
     filterHeader: css`
       margin-bottom: ${theme.spacing(0.5)};
