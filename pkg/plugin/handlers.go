@@ -26,6 +26,23 @@ func (e httpError) Error() string {
 	return e.message
 }
 
+type assetListMeta struct {
+	StorageConfigured  bool              `json:"storageConfigured"`
+	MaxUploadSizeBytes int64             `json:"maxUploadSizeBytes"`
+	MaxUploadSizeMb    int64             `json:"maxUploadSizeMb"`
+	Page               int               `json:"page"`
+	PageSize           int               `json:"pageSize"`
+	PageCount          int               `json:"pageCount"`
+	TotalCount         int64             `json:"totalCount"`
+	Filters            map[string]string `json:"filters"`
+	StorageError       string            `json:"storageError,omitempty"`
+}
+
+type assetListResponse struct {
+	Data []AssetRecord `json:"data"`
+	Meta assetListMeta `json:"meta"`
+}
+
 func (a *App) handleAssetsCollection(w http.ResponseWriter, r *http.Request) {
 	orgID, err := resolveOrgIDFromRequest(r)
 	if err != nil {
@@ -35,21 +52,30 @@ func (a *App) handleAssetsCollection(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		assets, err := a.listAssets(r.Context(), orgID)
+		opts := parseAssetListOptions(r)
+		result, err := a.listAssets(r.Context(), orgID, opts)
 		if err != nil {
 			log.Printf("listAssets failed: %v", err)
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		meta := map[string]interface{}{
-			"storageConfigured":  a.storageConfigured(),
-			"maxUploadSizeBytes": a.config.Storage.MaxUploadSizeBytes,
-			"maxUploadSizeMb":    a.config.Storage.MaxUploadSizeMB,
+		meta := assetListMeta{
+			StorageConfigured:  a.storageConfigured(),
+			MaxUploadSizeBytes: a.config.Storage.MaxUploadSizeBytes,
+			MaxUploadSizeMb:    a.config.Storage.MaxUploadSizeMB,
+			Page:               result.Page,
+			PageSize:           result.PageSize,
+			PageCount:          result.PageCount,
+			TotalCount:         result.TotalCount,
+			Filters:            result.AppliedFilters,
+		}
+		if meta.Filters == nil {
+			meta.Filters = map[string]string{}
 		}
 		if a.storageInitErr != nil {
-			meta["storageError"] = a.storageInitErr.Error()
+			meta.StorageError = a.storageInitErr.Error()
 		}
-		writeJSON(w, http.StatusOK, map[string]interface{}{"data": assets, "meta": meta})
+		writeJSON(w, http.StatusOK, assetListResponse{Data: result.Records, Meta: meta})
 	case http.MethodPost:
 		payload, err := decodeAssetPayload(r)
 		if err != nil {
@@ -274,6 +300,39 @@ func (a *App) handleAppSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, payload)
+}
+
+func parseAssetListOptions(r *http.Request) AssetListOptions {
+	query := r.URL.Query()
+
+	page, _ := strconv.Atoi(strings.TrimSpace(query.Get("page")))
+	pageSize, _ := strconv.Atoi(strings.TrimSpace(query.Get("pageSize")))
+
+	filters := make(map[string]string)
+	for key, values := range query {
+		if len(values) == 0 {
+			continue
+		}
+		if !strings.HasPrefix(key, "filter[") || !strings.HasSuffix(key, "]") {
+			continue
+		}
+		name := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(key, "filter["), "]"))
+		if name == "" {
+			continue
+		}
+		filters[name] = values[len(values)-1]
+	}
+
+	var parsedFilters map[string]string
+	if len(filters) > 0 {
+		parsedFilters = filters
+	}
+
+	return AssetListOptions{
+		Page:     page,
+		PageSize: pageSize,
+		Filters:  parsedFilters,
+	}
 }
 
 func decodeAssetPayload(r *http.Request) (AssetPayload, error) {

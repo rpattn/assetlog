@@ -27,6 +27,20 @@ var (
 	errAssetFileNotFound = errors.New("asset file not found")
 )
 
+const (
+	defaultAssetsPageSize = 25
+	maxAssetsPageSize     = 200
+)
+
+var assetFilterColumns = map[string]string{
+	"title":              "title",
+	"entry_date":         "entry_date",
+	"commissioning_date": "commissioning_date",
+	"station_name":       "station_name",
+	"technician":         "technician",
+	"service":            "service",
+}
+
 type AssetRecord struct {
 	ID                int64       `json:"id"`
 	Title             string      `json:"title"`
@@ -121,10 +135,81 @@ func (p AssetPayload) validate() error {
 	return nil
 }
 
-func (a *App) listAssets(ctx context.Context, orgID int64) ([]AssetRecord, error) {
-	rows, err := a.db.QueryContext(ctx, `SELECT id, title, entry_date, commissioning_date, station_name, technician, start_date, end_date, service, staff, latitude, longitude, pitch, roll, created_at, updated_at FROM assets WHERE org_id = ? ORDER BY entry_date DESC, id DESC`, orgID)
+type AssetListOptions struct {
+	Page     int
+	PageSize int
+	Filters  map[string]string
+}
+
+type AssetListResult struct {
+	Records        []AssetRecord
+	TotalCount     int64
+	Page           int
+	PageSize       int
+	PageCount      int
+	AppliedFilters map[string]string
+}
+
+func (opts *AssetListOptions) normalize() {
+	if opts.Page <= 0 {
+		opts.Page = 1
+	}
+	if opts.PageSize <= 0 {
+		opts.PageSize = defaultAssetsPageSize
+	}
+	if opts.PageSize > maxAssetsPageSize {
+		opts.PageSize = maxAssetsPageSize
+	}
+	if opts.Filters == nil {
+		opts.Filters = map[string]string{}
+	}
+}
+
+func (a *App) listAssets(ctx context.Context, orgID int64, opts AssetListOptions) (AssetListResult, error) {
+	opts.normalize()
+
+	whereParts := []string{"org_id = ?"}
+	args := []interface{}{orgID}
+	appliedFilters := make(map[string]string)
+
+	for key, value := range opts.Filters {
+		column, ok := assetFilterColumns[key]
+		if !ok {
+			continue
+		}
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		whereParts = append(whereParts, fmt.Sprintf("%s LIKE ?", column))
+		args = append(args, "%"+trimmed+"%")
+		appliedFilters[key] = trimmed
+	}
+
+	whereClause := strings.Join(whereParts, " AND ")
+
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM assets WHERE %s`, whereClause)
+	var total int64
+	if err := a.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return AssetListResult{}, err
+	}
+
+	page := opts.Page
+	if total > 0 {
+		maxPage := int((total + int64(opts.PageSize) - 1) / int64(opts.PageSize))
+		if page > maxPage {
+			page = maxPage
+		}
+	} else {
+		page = 1
+	}
+
+	offset := (page - 1) * opts.PageSize
+	queryArgs := append(append([]interface{}{}, args...), opts.PageSize, offset)
+
+	rows, err := a.db.QueryContext(ctx, fmt.Sprintf(`SELECT id, title, entry_date, commissioning_date, station_name, technician, start_date, end_date, service, staff, latitude, longitude, pitch, roll, created_at, updated_at FROM assets WHERE %s ORDER BY entry_date DESC, id DESC LIMIT ? OFFSET ?`, whereClause), queryArgs...)
 	if err != nil {
-		return nil, err
+		return AssetListResult{}, err
 	}
 	defer rows.Close()
 
@@ -135,7 +220,7 @@ func (a *App) listAssets(ctx context.Context, orgID int64) ([]AssetRecord, error
 		var service sqlNullString
 		var staffRaw sqlNullString
 		if err := rows.Scan(&record.ID, &record.Title, &record.EntryDate, &record.CommissioningDate, &record.StationName, &record.Technician, &record.StartDate, &record.EndDate, &service, &staffRaw, &record.Latitude, &record.Longitude, &record.Pitch, &record.Roll, &record.CreatedAt, &record.UpdatedAt); err != nil {
-			return nil, err
+			return AssetListResult{}, err
 		}
 		if service.Valid {
 			record.Service = service.String
@@ -149,12 +234,12 @@ func (a *App) listAssets(ctx context.Context, orgID int64) ([]AssetRecord, error
 		assetIDs = append(assetIDs, record.ID)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return AssetListResult{}, err
 	}
 
 	attachments, err := a.loadAssetFiles(ctx, orgID, assetIDs)
 	if err != nil {
-		return nil, err
+		return AssetListResult{}, err
 	}
 
 	for i, asset := range assets {
@@ -170,7 +255,19 @@ func (a *App) listAssets(ctx context.Context, orgID int64) ([]AssetRecord, error
 		}
 	}
 
-	return assets, nil
+	pageCount := 0
+	if total > 0 {
+		pageCount = int((total + int64(opts.PageSize) - 1) / int64(opts.PageSize))
+	}
+
+	return AssetListResult{
+		Records:        assets,
+		TotalCount:     total,
+		Page:           page,
+		PageSize:       opts.PageSize,
+		PageCount:      pageCount,
+		AppliedFilters: appliedFilters,
+	}, nil
 }
 
 func (a *App) getAsset(ctx context.Context, orgID, assetID int64) (AssetRecord, error) {

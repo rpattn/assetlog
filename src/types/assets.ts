@@ -45,8 +45,18 @@ export interface AssetPayload {
   roll: number;
 }
 
+export type AssetListFilters = Partial<
+  Record<'title' | 'entry_date' | 'commissioning_date' | 'station_name' | 'technician' | 'service', string>
+>;
+
 export interface AssetListMeta {
   storageConfigured: boolean;
   maxUploadSizeBytes: number;
   maxUploadSizeMb: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+  totalCount: number;
+  filters: AssetListFilters;
+  storageError?: string;
 }

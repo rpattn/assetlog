@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
 import { useStyles2, Button, Alert, AlertVariant, Modal, ConfirmModal, Spinner } from '@grafana/ui';
@@ -7,7 +7,7 @@ import { AssetForm } from '../components/AssetForm';
 import { AttachmentManager } from '../components/AttachmentManager';
 import { AssetTable } from '../components/AssetTable';
 import { testIds } from '../components/testIds';
-import type { AssetFile, AssetPayload, AssetRecord } from '../types/assets';
+import type { AssetFile, AssetListFilters, AssetListMeta, AssetPayload, AssetRecord } from '../types/assets';
 import {
   createAsset,
   deleteAsset,
@@ -17,7 +17,6 @@ import {
   updateAsset,
   uploadAttachment,
 } from '../utils/assetsApi';
-import { sortAssets } from '../utils/assetSort';
 
 type ModalState = {
   mode: 'create' | 'edit';
@@ -43,18 +42,49 @@ function PageOne() {
   const [status, setStatus] = useState<StatusMessage | null>(null);
   const [storageConfigured, setStorageConfigured] = useState(false);
   const [maxUploadSize, setMaxUploadSize] = useState(0);
+  const [meta, setMeta] = useState<AssetListMeta | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [filters, setFilters] = useState<AssetListFilters>({});
+  const [refreshToken, setRefreshToken] = useState(0);
+
+  const filterParams = useMemo<AssetListFilters>(() => {
+    const result: Record<string, string> = {};
+    Object.entries(filters ?? {}).forEach(([key, value]) => {
+      if (typeof value !== 'string') {
+        return;
+      }
+      const trimmed = value.trim();
+      if (trimmed === '') {
+        return;
+      }
+      result[key] = trimmed;
+    });
+    return result as AssetListFilters;
+  }, [filters]);
+
+  const filterKey = useMemo(() => JSON.stringify(filterParams), [filterParams]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
 
-    fetchAssets()
-      .then(({ assets: records, meta }) => {
+    fetchAssets({ page, pageSize, filters: filterParams })
+      .then(({ assets: records, meta: listMeta }) => {
         if (!cancelled) {
-          setAssets(sortAssets(records));
-          setStorageConfigured(Boolean(meta?.storageConfigured));
-          setMaxUploadSize(meta?.maxUploadSizeBytes ?? 0);
+          setAssets(records);
+          setMeta(listMeta);
+          setStorageConfigured(Boolean(listMeta?.storageConfigured));
+          setMaxUploadSize(listMeta?.maxUploadSizeBytes ?? 0);
+          if (listMeta?.page && listMeta.page !== page) {
+            setPage(listMeta.page);
+          }
+          if (listMeta?.pageSize && listMeta.pageSize !== pageSize) {
+            setPageSize(listMeta.pageSize);
+          }
+          const nextFilters = listMeta?.filters ?? {};
+          setFilters((prev) => (shallowEqualFilters(prev, nextFilters) ? prev : nextFilters));
           setLoading(false);
         }
       })
@@ -68,7 +98,7 @@ function PageOne() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [page, pageSize, filterKey, refreshToken]);
 
   const openCreate = () => {
     setModalState({ mode: 'create' });
@@ -96,14 +126,15 @@ function PageOne() {
     try {
       if (modalState.mode === 'edit' && modalState.asset) {
         const updated = await updateAsset(modalState.asset.id, payload);
-        setAssets((prev) => sortAssets(prev.map((item) => (item.id === updated.id ? updated : item))));
+        setAssets((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
         setStatus({ severity: 'success', message: `Updated asset "${updated.title}".` });
       } else {
         const created = await createAsset(payload);
-        setAssets((prev) => sortAssets([...prev, created]));
         setStatus({ severity: 'success', message: `Created asset "${created.title}".` });
+        setPage(1);
       }
       setModalState(null);
+      setRefreshToken((token) => token + 1);
     } catch (err) {
       setFormError(toErrorMessage(err));
     } finally {
@@ -130,9 +161,14 @@ function PageOne() {
     setDeleteError(null);
     try {
       await deleteAsset(deleteState.id);
+      const currentPage = page;
+      if (assets.length === 1 && currentPage > 1) {
+        setPage(currentPage - 1);
+      }
       setAssets((prev) => prev.filter((item) => item.id !== deleteState.id));
       setStatus({ severity: 'success', message: `Deleted asset "${deleteState.title}".` });
       setDeleteState(null);
+      setRefreshToken((token) => token + 1);
     } catch (err) {
       setDeleteError(toErrorMessage(err));
     } finally {
@@ -188,6 +224,35 @@ function PageOne() {
     });
   };
 
+  const handleFiltersChange = useCallback((next: AssetListFilters) => {
+    setFilters((prev) => {
+      const normalized = next ?? {};
+      return shallowEqualFilters(prev, normalized) ? prev : normalized;
+    });
+    setPage(1);
+  }, []);
+
+  const handlePageChange = useCallback((nextPage: number) => {
+    if (!Number.isFinite(nextPage) || nextPage < 1) {
+      return;
+    }
+    setPage(nextPage);
+  }, []);
+
+  const handlePageSizeChange = useCallback((nextSize: number) => {
+    if (!Number.isFinite(nextSize) || nextSize <= 0) {
+      return;
+    }
+    setPageSize(nextSize);
+    setPage(1);
+  }, []);
+
+  const totalCount = meta?.totalCount ?? assets.length;
+  const activePageSize = meta?.pageSize ?? pageSize;
+  const activePage = meta?.page ?? page;
+  const pageCount = meta?.pageCount ?? (activePageSize > 0 ? Math.max(1, Math.ceil(totalCount / activePageSize)) : 1);
+  const hasActiveFilters = Object.keys(filterParams).length > 0;
+
   return (
     <PluginPage>
       <div data-testid={testIds.pageOne.container} className={styles.container}>
@@ -222,14 +287,28 @@ function PageOne() {
           </Alert>
         )}
 
-        {!loading && !error && assets.length === 0 && (
-          <Alert title="No assets" severity="info" data-testid={testIds.pageOne.emptyState}>
-            No assets found for your organization.
-          </Alert>
-        )}
-
-        {!loading && !error && assets.length > 0 && (
-          <AssetTable assets={assets} onEdit={openEdit} onDelete={requestDelete} testId={testIds.pageOne.table} />
+        {!loading && !error && (
+          <>
+            <AssetTable
+              assets={assets}
+              onEdit={openEdit}
+              onDelete={requestDelete}
+              testId={testIds.pageOne.table}
+              page={activePage}
+              pageSize={activePageSize}
+              pageCount={pageCount}
+              totalCount={totalCount}
+              filters={filters}
+              onFiltersChange={handleFiltersChange}
+              onPageChange={handlePageChange}
+              onPageSizeChange={handlePageSizeChange}
+            />
+            {assets.length === 0 && (
+              <Alert title="No assets" severity="info" data-testid={testIds.pageOne.emptyState}>
+                {hasActiveFilters ? 'No assets match the selected filters.' : 'No assets found for your organization.'}
+              </Alert>
+            )}
+          </>
         )}
       </div>
 
@@ -303,6 +382,22 @@ function withAttachments(asset: AssetRecord, attachments: AssetFile[]): AssetRec
 
 function sortAttachments(files: AssetFile[]): AssetFile[] {
   return [...files].sort((a, b) => a.id - b.id);
+}
+
+function shallowEqualFilters(a?: AssetListFilters, b?: AssetListFilters): boolean {
+  const mapA = a ?? {};
+  const mapB = b ?? {};
+  const keysA = Object.keys(mapA);
+  const keysB = Object.keys(mapB);
+  if (keysA.length !== keysB.length) {
+    return false;
+  }
+  for (const key of keysA) {
+    if ((mapA as Record<string, string>)[key] !== (mapB as Record<string, string>)[key]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 const getStyles = (theme: GrafanaTheme2) => {

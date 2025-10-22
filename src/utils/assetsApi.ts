@@ -1,5 +1,11 @@
 import { getBackendSrv, isFetchError } from '@grafana/runtime';
-import type { AssetFile, AssetListMeta, AssetPayload, AssetRecord } from '../types/assets';
+import type {
+  AssetFile,
+  AssetListFilters,
+  AssetListMeta,
+  AssetPayload,
+  AssetRecord,
+} from '../types/assets';
 
 const PLUGIN_ID = 'rpatt-assetlog-app';
 const BASE_URL = `/api/plugins/${PLUGIN_ID}/resources/assets`;
@@ -18,20 +24,26 @@ export interface AssetListResult {
   meta: AssetListMeta;
 }
 
-export async function fetchAssets(): Promise<AssetListResult> {
+export interface AssetListQuery {
+  page?: number;
+  pageSize?: number;
+  filters?: AssetListFilters;
+}
+
+export async function fetchAssets(query?: AssetListQuery): Promise<AssetListResult> {
   const backend = tryGetBackendSrv();
   if (!backend) {
     return {
       assets: [],
-      meta: { storageConfigured: false, maxUploadSizeBytes: 0, maxUploadSizeMb: 0 },
+      meta: getDefaultMeta(),
     };
   }
-  const response = await backend.get<ListResponse>(BASE_URL, undefined, undefined, { showErrorAlert: false });
-  const meta: AssetListMeta = response?.meta ?? {
-    storageConfigured: false,
-    maxUploadSizeBytes: 0,
-    maxUploadSizeMb: 0,
-  };
+  const url = buildListURL(query);
+  const response = await backend.get<ListResponse>(url, undefined, undefined, { showErrorAlert: false });
+  const meta: AssetListMeta = response?.meta ?? getDefaultMeta();
+  if (!meta.filters) {
+    meta.filters = {};
+  }
   return {
     assets: response?.data ?? [],
     meta,
@@ -144,6 +156,49 @@ async function buildResponseError(response: Response): Promise<Error> {
       ? bodyText
       : response.statusText || `request failed with status ${response.status}`;
   return new Error(message);
+}
+
+function buildListURL(query?: AssetListQuery): string {
+  if (!query) {
+    return BASE_URL;
+  }
+  const params = new URLSearchParams();
+  if (query.page && query.page > 0) {
+    params.set('page', String(query.page));
+  }
+  if (query.pageSize && query.pageSize > 0) {
+    params.set('pageSize', String(query.pageSize));
+  }
+  if (query.filters) {
+    Object.entries(query.filters).forEach(([key, value]) => {
+      if (typeof value !== 'string') {
+        return;
+      }
+      const trimmed = value.trim();
+      if (trimmed === '') {
+        return;
+      }
+      params.set(`filter[${key}]`, trimmed);
+    });
+  }
+  const queryString = params.toString();
+  if (!queryString) {
+    return BASE_URL;
+  }
+  return `${BASE_URL}?${queryString}`;
+}
+
+function getDefaultMeta(): AssetListMeta {
+  return {
+    storageConfigured: false,
+    maxUploadSizeBytes: 0,
+    maxUploadSizeMb: 0,
+    page: 1,
+    pageSize: 25,
+    pageCount: 0,
+    totalCount: 0,
+    filters: {},
+  };
 }
 
 function tryGetBackendSrv() {
