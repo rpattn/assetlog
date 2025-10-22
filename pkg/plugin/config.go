@@ -74,5 +74,8 @@ func parseConfig(settings backend.AppInstanceSettings) (Config, error) {
 }
 
 func (s StorageConfig) IsFullyConfigured() bool {
+	if localStorageOverrideEnabled() {
+		return true
+	}
 	return s.Bucket != "" && len(s.ServiceAccountJSON) > 0
 }

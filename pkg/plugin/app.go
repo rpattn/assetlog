@@ -76,6 +76,9 @@ func (a *App) CheckHealth(_ context.Context, _ *backend.CheckHealthRequest) (*ba
 	}
 	status := backend.HealthStatusOk
 	message := "ok"
+	if localStorageOverrideEnabled() {
+		return &backend.CheckHealthResult{Status: status, Message: "local storage override enabled"}, nil
+	}
 	switch {
 	case a.config.Storage.Bucket == "" && len(a.config.Storage.ServiceAccountJSON) == 0:
 		status = backend.HealthStatusError
