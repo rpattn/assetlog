@@ -46,6 +46,9 @@ func (a *App) handleAssetsCollection(w http.ResponseWriter, r *http.Request) {
 			"maxUploadSizeBytes": a.config.Storage.MaxUploadSizeBytes,
 			"maxUploadSizeMb":    a.config.Storage.MaxUploadSizeMB,
 		}
+		if a.storageInitErr != nil {
+			meta["storageError"] = a.storageInitErr.Error()
+		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"data": assets, "meta": meta})
 	case http.MethodPost:
 		payload, err := decodeAssetPayload(r)
@@ -143,7 +146,11 @@ func (a *App) handleAssetResource(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) handleAssetFileUpload(w http.ResponseWriter, r *http.Request, orgID, assetID int64) {
 	if !a.storageConfigured() {
-		http.Error(w, "attachments not configured", http.StatusBadRequest)
+		msg := "attachments not configured"
+		if a.storageInitErr != nil {
+			msg = fmt.Sprintf("attachments unavailable: %v", a.storageInitErr)
+		}
+		http.Error(w, msg, http.StatusBadRequest)
 		return
 	}
 	if err := a.ensureAssetExists(r.Context(), orgID, assetID); err != nil {
@@ -234,6 +241,39 @@ func (a *App) handleAssetFileDelete(w http.ResponseWriter, r *http.Request, orgI
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *App) handleAppSettings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if _, err := resolveOrgIDFromRequest(r); err != nil {
+		writeHTTPError(w, err)
+		return
+	}
+
+	storageInfo := map[string]interface{}{"configured": a.storageConfigured()}
+	if a.storageInitErr != nil {
+		storageInfo["error"] = a.storageInitErr.Error()
+	}
+
+	payload := map[string]interface{}{
+		"jsonData": map[string]interface{}{
+			"apiUrl":          a.config.APIURL,
+			"bucketName":      a.config.Storage.Bucket,
+			"objectPrefix":    a.config.Storage.Prefix,
+			"maxUploadSizeMb": a.config.Storage.MaxUploadSizeMB,
+		},
+		"secureJsonFields": map[string]bool{
+			"apiKey":            a.config.APIKey != "",
+			"gcsServiceAccount": len(a.config.Storage.ServiceAccountJSON) > 0,
+		},
+		"storage": storageInfo,
+	}
+
+	writeJSON(w, http.StatusOK, payload)
 }
 
 func decodeAssetPayload(r *http.Request) (AssetPayload, error) {

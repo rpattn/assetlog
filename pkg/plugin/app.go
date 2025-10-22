@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
@@ -15,6 +16,8 @@ type App struct {
 	backend.CallResourceHandler
 	db      *sql.DB
 	storage StorageClient
+	// storageInitErr keeps track of storage initialization failures so we can surface them in health checks.
+	storageInitErr error
 	// config stores the current plugin configuration for reuse by handlers.
 	config Config
 }
@@ -34,16 +37,44 @@ func NewApp(ctx context.Context, settings backend.AppInstanceSettings) (instance
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	a := &App{config: cfg}
-	if cfg.Storage.IsFullyConfigured() {
-		storageClient, err := newStorageClient(ctx, cfg.Storage)
-		if err != nil {
-			return nil, fmt.Errorf("init storage: %w", err)
-		}
-		a.storage = storageClient
-	}
 	if err := a.initDatabase(); err != nil {
 		return nil, fmt.Errorf("initDatabase: %w", err)
 	}
+
+	pluginCtx := backend.PluginConfigFromContext(ctx)
+	var persisted *persistedAppSettings
+	if pluginCtx.OrgID != 0 {
+		if persisted, err = a.loadPersistedAppSettings(ctx, pluginCtx.OrgID); err != nil {
+			log.Printf("load persisted app settings failed: %v", err)
+		} else if persisted != nil {
+			persistedCfg, parseErr := parseConfig(backend.AppInstanceSettings{
+				JSONData:                persisted.JSONData,
+				DecryptedSecureJSONData: persisted.SecureJSONData,
+			})
+			if parseErr != nil {
+				log.Printf("parse persisted app settings failed: %v", parseErr)
+			} else {
+				prefer := shouldPreferPersistedSettings(settings, persisted)
+				cfg = mergeConfigWithPersisted(cfg, persistedCfg, prefer)
+			}
+		}
+		if err := a.persistAppInstanceSettings(ctx, pluginCtx.OrgID, settings, persisted); err != nil {
+			log.Printf("persist app settings failed: %v", err)
+		}
+	}
+
+	a.config = cfg
+	a.storageInitErr = nil
+	if cfg.Storage.IsFullyConfigured() {
+		storageClient, err := newStorageClient(ctx, cfg.Storage)
+		if err != nil {
+			log.Printf("storage initialization failed: %v", err)
+			a.storageInitErr = err
+		} else {
+			a.storage = storageClient
+		}
+	}
+
 	mux := http.NewServeMux()
 	a.registerRoutes(mux)
 	a.CallResourceHandler = &withContextHandler{inner: httpadapter.New(mux)}
@@ -76,6 +107,12 @@ func (a *App) CheckHealth(_ context.Context, _ *backend.CheckHealthRequest) (*ba
 	}
 	status := backend.HealthStatusOk
 	message := "ok"
+	if a.storageInitErr != nil {
+		return &backend.CheckHealthResult{
+			Status:  backend.HealthStatusError,
+			Message: fmt.Sprintf("storage initialization failed: %v", a.storageInitErr),
+		}, nil
+	}
 	if localStorageOverrideEnabled() {
 		return &backend.CheckHealthResult{Status: status, Message: "local storage override enabled"}, nil
 	}

@@ -6,12 +6,13 @@ import (
 )
 
 var migrations = []struct {
-	version int
-	name    string
-	script  string
+        version int
+        name    string
+        script  string
 }{
-	{version: 1, name: "init", script: migration0001},
-	{version: 2, name: "attachments", script: migration0002},
+        {version: 1, name: "init", script: migration0001},
+        {version: 2, name: "attachments", script: migration0002},
+        {version: 3, name: "app_settings", script: migration0003},
 }
 
 //go:embed migrations/0001_init.sql
@@ -19,6 +20,9 @@ var migration0001 string
 
 //go:embed migrations/0002_attachments.sql
 var migration0002 string
+
+//go:embed migrations/0003_app_settings.sql
+var migration0003 string
 
 func migrationName(version int) string {
 	for _, m := range migrations {

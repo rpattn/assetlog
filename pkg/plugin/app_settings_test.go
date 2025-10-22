@@ -1,0 +1,133 @@
+package plugin
+
+import (
+	"context"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/grafana/grafana-plugin-sdk-go/backend"
+)
+
+func TestNewAppPersistsSettingsPerOrg(t *testing.T) {
+	t.Setenv("SQLITE_PATH", filepath.Join(t.TempDir(), "assets.db"))
+	t.Setenv(envForceLocalStorage, "1")
+
+	ctx := backend.WithPluginContext(context.Background(), backend.PluginContext{OrgID: 99})
+	settings := backend.AppInstanceSettings{
+		JSONData: []byte(`{"apiUrl":"https://example.com","bucketName":"bucket","objectPrefix":"prefix/","maxUploadSizeMb":64}`),
+		DecryptedSecureJSONData: map[string]string{
+			"apiKey":            "secret-key",
+			"gcsServiceAccount": "{}",
+		},
+		Updated: time.Now().UTC(),
+	}
+
+	inst, err := NewApp(ctx, settings)
+	if err != nil {
+		t.Fatalf("NewApp returned error: %v", err)
+	}
+	app := inst.(*App)
+	defer app.Dispose()
+
+	persisted, err := app.loadPersistedAppSettings(context.Background(), 99)
+	if err != nil {
+		t.Fatalf("loadPersistedAppSettings returned error: %v", err)
+	}
+	if persisted == nil {
+		t.Fatalf("expected persisted settings to be stored")
+	}
+	if string(persisted.JSONData) == "" {
+		t.Fatalf("expected json data to be stored")
+	}
+	if persisted.SecureJSONData["apiKey"] != "secret-key" {
+		t.Fatalf("expected api key to be persisted")
+	}
+}
+
+func TestNewAppUsesPersistedSettingsWhenGrafanaResets(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "assets.db")
+	t.Setenv("SQLITE_PATH", dbPath)
+	t.Setenv(envForceLocalStorage, "1")
+
+	orgID := int64(7)
+	ctx := backend.WithPluginContext(context.Background(), backend.PluginContext{OrgID: orgID})
+	initialSettings := backend.AppInstanceSettings{
+		JSONData: []byte(`{"apiUrl":"https://api.initial","bucketName":"persisted-bucket","objectPrefix":"org7/","maxUploadSizeMb":32}`),
+		DecryptedSecureJSONData: map[string]string{
+			"apiKey":            "initial-key",
+			"gcsServiceAccount": `{"client_email":"test@example.com","private_key":"-----BEGIN PRIVATE KEY-----\nMIIBVwIBADANBgkqhkiG9w0BAQEFAASCAT8wggE7AgEAAkEAtestkey\n-----END PRIVATE KEY-----\n"}`,
+		},
+		Updated: time.Now().UTC(),
+	}
+
+	inst, err := NewApp(ctx, initialSettings)
+	if err != nil {
+		t.Fatalf("NewApp returned error: %v", err)
+	}
+	app := inst.(*App)
+	app.Dispose()
+
+	// Simulate Grafana restarting the plugin with default/empty settings.
+	resetCtx := backend.WithPluginContext(context.Background(), backend.PluginContext{OrgID: orgID})
+	resetSettings := backend.AppInstanceSettings{}
+
+	inst2, err := NewApp(resetCtx, resetSettings)
+	if err != nil {
+		t.Fatalf("NewApp after reset returned error: %v", err)
+	}
+	app2 := inst2.(*App)
+	defer app2.Dispose()
+
+	if app2.config.Storage.Bucket != "persisted-bucket" {
+		t.Fatalf("expected bucket from persisted settings, got %q", app2.config.Storage.Bucket)
+	}
+	if len(app2.config.Storage.ServiceAccountJSON) == 0 {
+		t.Fatalf("expected service account to be restored from persisted settings")
+	}
+	if app2.config.APIKey != "initial-key" {
+		t.Fatalf("expected api key to be restored from persisted settings")
+	}
+}
+
+func TestNewAppHandlesStorageInitErrorsGracefully(t *testing.T) {
+	t.Setenv("SQLITE_PATH", filepath.Join(t.TempDir(), "assets.db"))
+	// Ensure local storage override is disabled for this test.
+	t.Setenv(envForceLocalStorage, "")
+
+	ctx := backend.WithPluginContext(context.Background(), backend.PluginContext{OrgID: 11})
+	// Missing client_email should trigger an initialization error.
+	serviceAccount := `{"private_key":"-----BEGIN PRIVATE KEY-----\nABC\n-----END PRIVATE KEY-----\n"}`
+	settings := backend.AppInstanceSettings{
+		JSONData: []byte(`{"bucketName":"broken-bucket"}`),
+		DecryptedSecureJSONData: map[string]string{
+			"gcsServiceAccount": serviceAccount,
+		},
+	}
+
+	inst, err := NewApp(ctx, settings)
+	if err != nil {
+		t.Fatalf("NewApp should not fail when storage init errors: %v", err)
+	}
+	app := inst.(*App)
+	defer app.Dispose()
+
+	if app.storageConfigured() {
+		t.Fatalf("storage should not be configured when initialization fails")
+	}
+	if app.storageInitErr == nil {
+		t.Fatalf("expected storage initialization error to be captured")
+	}
+
+	res, err := app.CheckHealth(context.Background(), &backend.CheckHealthRequest{})
+	if err != nil {
+		t.Fatalf("CheckHealth returned error: %v", err)
+	}
+	if res.Status != backend.HealthStatusError {
+		t.Fatalf("expected health status error, got %v", res.Status)
+	}
+	if !strings.Contains(res.Message, "storage initialization failed") {
+		t.Fatalf("expected health message to mention storage failure, got %q", res.Message)
+	}
+}
