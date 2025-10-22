@@ -1,4 +1,4 @@
-import React, { FormEvent, useEffect, useId, useMemo, useState } from 'react';
+import React, { ComponentProps, FormEvent, useEffect, useId, useMemo, useState } from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
 import { useStyles2, Field, Input, TextArea, Alert, Modal, Button } from '@grafana/ui';
@@ -21,6 +21,47 @@ type FormState = {
 };
 
 type FormErrors = Partial<Record<keyof FormState, string>>;
+
+type InputProps = ComponentProps<typeof Input>;
+
+type FieldConfig = {
+  name: Exclude<keyof FormState, 'staffText'>;
+  label: string;
+  required?: boolean;
+  placeholder?: string;
+  type?: InputProps['type'];
+  inputMode?: InputProps['inputMode'];
+  step?: InputProps['step'];
+};
+
+const formFieldSchema: FieldConfig[] = [
+  { name: 'title', label: 'Title', required: true, placeholder: 'Asset title', type: 'text' },
+  { name: 'entry_date', label: 'Entry date', required: true, type: 'date', placeholder: 'YYYY-MM-DD' },
+  { name: 'commissioning_date', label: 'Commissioning date', required: true, type: 'date', placeholder: 'YYYY-MM-DD' },
+  { name: 'station_name', label: 'Station name', required: true, type: 'text' },
+  { name: 'technician', label: 'Technician', required: true, type: 'text' },
+  { name: 'start_date', label: 'Start date', required: true, type: 'date', placeholder: 'YYYY-MM-DD' },
+  { name: 'end_date', label: 'End date', required: true, type: 'date', placeholder: 'YYYY-MM-DD' },
+  { name: 'service', label: 'Service', type: 'text' },
+  {
+    name: 'latitude',
+    label: 'Latitude',
+    placeholder: '0',
+    type: 'number',
+    inputMode: 'decimal',
+    step: 'any',
+  },
+  {
+    name: 'longitude',
+    label: 'Longitude',
+    placeholder: '0',
+    type: 'number',
+    inputMode: 'decimal',
+    step: 'any',
+  },
+  { name: 'pitch', label: 'Pitch', placeholder: '0', type: 'number', inputMode: 'decimal', step: 'any' },
+  { name: 'roll', label: 'Roll', placeholder: '0', type: 'number', inputMode: 'decimal', step: 'any' },
+];
 
 export interface AssetFormProps {
   asset?: AssetRecord;
@@ -87,99 +128,29 @@ export const AssetForm = ({
   return (
     <form className={styles.form} onSubmit={handleSubmit} data-testid="asset-form">
       <div className={styles.grid}>
-        <Field
-          label="Title"
-          required
-          error={errors.title}
-          invalid={Boolean(errors.title)}
-          htmlFor={fieldId('title')}
-        >
-          <Input id={fieldId('title')} value={form.title} onChange={handleChange('title')} placeholder="Asset title" />
-        </Field>
-        <Field
-          label="Entry date"
-          required
-          error={errors.entry_date}
-          invalid={Boolean(errors.entry_date)}
-          htmlFor={fieldId('entry_date')}
-        >
-          <Input id={fieldId('entry_date')} value={form.entry_date} onChange={handleChange('entry_date')} placeholder="YYYY-MM-DD" />
-        </Field>
-        <Field
-          label="Commissioning date"
-          required
-          error={errors.commissioning_date}
-          invalid={Boolean(errors.commissioning_date)}
-          htmlFor={fieldId('commissioning_date')}
-        >
-          <Input
-            id={fieldId('commissioning_date')}
-            value={form.commissioning_date}
-            onChange={handleChange('commissioning_date')}
-            placeholder="YYYY-MM-DD"
-          />
-        </Field>
-        <Field
-          label="Station name"
-          required
-          error={errors.station_name}
-          invalid={Boolean(errors.station_name)}
-          htmlFor={fieldId('station_name')}
-        >
-          <Input id={fieldId('station_name')} value={form.station_name} onChange={handleChange('station_name')} />
-        </Field>
-        <Field
-          label="Technician"
-          required
-          error={errors.technician}
-          invalid={Boolean(errors.technician)}
-          htmlFor={fieldId('technician')}
-        >
-          <Input id={fieldId('technician')} value={form.technician} onChange={handleChange('technician')} />
-        </Field>
-        <Field
-          label="Start date"
-          required
-          error={errors.start_date}
-          invalid={Boolean(errors.start_date)}
-          htmlFor={fieldId('start_date')}
-        >
-          <Input id={fieldId('start_date')} value={form.start_date} onChange={handleChange('start_date')} placeholder="YYYY-MM-DD" />
-        </Field>
-        <Field
-          label="End date"
-          required
-          error={errors.end_date}
-          invalid={Boolean(errors.end_date)}
-          htmlFor={fieldId('end_date')}
-        >
-          <Input id={fieldId('end_date')} value={form.end_date} onChange={handleChange('end_date')} placeholder="YYYY-MM-DD" />
-        </Field>
-        <Field label="Service" htmlFor={fieldId('service')}>
-          <Input id={fieldId('service')} value={form.service} onChange={handleChange('service')} />
-        </Field>
-        <Field
-          label="Latitude"
-          error={errors.latitude}
-          invalid={Boolean(errors.latitude)}
-          htmlFor={fieldId('latitude')}
-        >
-          <Input id={fieldId('latitude')} value={form.latitude} onChange={handleChange('latitude')} placeholder="0" />
-        </Field>
-        <Field
-          label="Longitude"
-          error={errors.longitude}
-          invalid={Boolean(errors.longitude)}
-          htmlFor={fieldId('longitude')}
-        >
-          <Input id={fieldId('longitude')} value={form.longitude} onChange={handleChange('longitude')} placeholder="0" />
-        </Field>
-        <Field label="Pitch" error={errors.pitch} invalid={Boolean(errors.pitch)} htmlFor={fieldId('pitch')}>
-          <Input id={fieldId('pitch')} value={form.pitch} onChange={handleChange('pitch')} placeholder="0" />
-        </Field>
-        <Field label="Roll" error={errors.roll} invalid={Boolean(errors.roll)} htmlFor={fieldId('roll')}>
-          <Input id={fieldId('roll')} value={form.roll} onChange={handleChange('roll')} placeholder="0" />
-        </Field>
+        {formFieldSchema.map(({ name, label, required, placeholder, type, inputMode, step }) => {
+          const error = errors[name];
+          return (
+            <Field
+              key={name}
+              label={label}
+              required={required}
+              error={error}
+              invalid={Boolean(error)}
+              htmlFor={fieldId(name)}
+            >
+              <Input
+                id={fieldId(name)}
+                value={form[name]}
+                onChange={handleChange(name)}
+                placeholder={placeholder}
+                type={type}
+                inputMode={inputMode}
+                step={step}
+              />
+            </Field>
+          );
+        })}
       </div>
       <Field label="Staff" description="One person per line" htmlFor={fieldId('staffText')}>
         <TextArea
@@ -208,12 +179,12 @@ export const AssetForm = ({
 function buildFormState(asset?: AssetRecord): FormState {
   return {
     title: asset?.title ?? '',
-    entry_date: asset?.entry_date ?? '',
-    commissioning_date: asset?.commissioning_date ?? '',
+    entry_date: formatDateValue(asset?.entry_date),
+    commissioning_date: formatDateValue(asset?.commissioning_date),
     station_name: asset?.station_name ?? '',
     technician: asset?.technician ?? '',
-    start_date: asset?.start_date ?? '',
-    end_date: asset?.end_date ?? '',
+    start_date: formatDateValue(asset?.start_date),
+    end_date: formatDateValue(asset?.end_date),
     service: asset?.service ?? '',
     staffText: asset?.staff?.join('\n') ?? '',
     latitude: asset ? formatNumber(asset.latitude) : '',
@@ -225,6 +196,33 @@ function buildFormState(asset?: AssetRecord): FormState {
 
 function formatNumber(value: number): string {
   return String(value);
+}
+
+function formatDateValue(value?: string): string {
+  if (!value) {
+    return '';
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+
+  const isoMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (isoMatch) {
+    return isoMatch[1];
+  }
+
+  const parsedTimestamp = Date.parse(trimmed);
+  if (!Number.isNaN(parsedTimestamp)) {
+    return new Date(parsedTimestamp).toISOString().slice(0, 10);
+  }
+
+  return trimmed;
 }
 
 function toPayload(form: FormState): AssetPayload {
