@@ -735,6 +735,13 @@ const getStyles = (theme: GrafanaTheme2) => {
     pointer-events: auto;
     transition: opacity 0.15s ease-in-out;
     min-width: 0;
+
+    &:focus,
+    &:focus-visible,
+    &:hover {
+      opacity: 1;
+      pointer-events: auto;
+    }
   `;
 
   const filterButtonActive = css`
@@ -753,6 +760,7 @@ const getStyles = (theme: GrafanaTheme2) => {
       overflow-x: auto;
       border: ${border};
       border-radius: 4px;
+      min-height: 30vh;
     `,
     table: css`
       width: 100%;
