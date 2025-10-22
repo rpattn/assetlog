@@ -3,9 +3,17 @@ import { css } from '@emotion/css';
 import { GrafanaTheme2, PanelProps } from '@grafana/data';
 import { useStyles2, Alert, Spinner, Button } from '@grafana/ui';
 
-import type { AssetRecord } from '../../types/assets';
+import type {
+  AssetFilterKey,
+  AssetListFilters,
+  AssetListSort,
+  AssetRecord,
+  AssetSortDirection,
+  AssetSortKey,
+} from '../../types/assets';
+import { EMPTY_FILTER_VALUE } from '../../types/assets';
 import { fetchAssets, toErrorMessage } from '../../utils/assetsApi';
-import { sortAssets } from '../../utils/assetSort';
+import type { AssetListQuery } from '../../utils/assetsApi';
 import { AssetTable } from '../../components/AssetTable';
 import type { AssetLogTableOptions } from './types';
 
@@ -16,16 +24,33 @@ export const AssetLogTablePanel: React.FC<PanelProps<AssetLogTableOptions>> = ({
   const [error, setError] = useState<string | null>(null);
   const [manualReload, setManualReload] = useState(0);
 
+  const filters = useMemo(() => buildFilters(options.filters), [options.filters]);
+  const sort = useMemo(() => buildSort(options.sortKey, options.sortDirection), [options.sortKey, options.sortDirection]);
+  const maxItems = useMemo(() => sanitizeMaxItems(options.maxItems), [options.maxItems]);
+  const requestId = data?.request?.requestId;
+
   useEffect(() => {
     let cancelled = false;
 
     setLoading(true);
     setError(null);
 
-    fetchAssets()
+    const query: AssetListQuery = {};
+    if (filters && Object.keys(filters).length > 0) {
+      query.filters = filters;
+    }
+    if (sort) {
+      query.sort = sort;
+    }
+    if (maxItems) {
+      query.page = 1;
+      query.pageSize = maxItems;
+    }
+
+    fetchAssets(query)
       .then(({ assets: records }) => {
         if (!cancelled) {
-          setAssets(sortAssets(records));
+          setAssets(records);
         }
       })
       .catch((err) => {
@@ -42,9 +67,8 @@ export const AssetLogTablePanel: React.FC<PanelProps<AssetLogTableOptions>> = ({
     return () => {
       cancelled = true;
     };
-  }, [data?.request?.requestId, manualReload]);
+  }, [filters, sort, maxItems, manualReload, requestId]);
 
-  const maxItems = useMemo(() => sanitizeMaxItems(options.maxItems), [options.maxItems]);
   const visibleAssets = useMemo(() => {
     if (!maxItems) {
       return assets;
@@ -108,6 +132,100 @@ const sanitizeMaxItems = (value: number | undefined) => {
 
   return normalized;
 };
+
+function buildFilters(filters?: AssetLogTableOptions['filters']): AssetListFilters | undefined {
+  if (!filters) {
+    return undefined;
+  }
+
+  const normalized: AssetListFilters = {};
+  (Object.entries(filters) as [AssetFilterKey, string | undefined][]).forEach(([key, raw]) => {
+    const values = parseFilterValues(raw);
+    if (!values || values.length === 0) {
+      return;
+    }
+    normalized[key] = values;
+  });
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function parseFilterValues(value?: string): string[] | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const parts = value
+    .split(/[\n,]+/)
+    .map((part) => part.trim())
+    .filter((part) => part !== '');
+
+  if (parts.length === 0) {
+    return undefined;
+  }
+
+  const seen = new Set<string>();
+  const values: string[] = [];
+
+  parts.forEach((part) => {
+    const normalized = normalizeFilterToken(part);
+    if (seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    values.push(normalized);
+  });
+
+  values.sort(compareFilterValue);
+  return values;
+}
+
+function normalizeFilterToken(value: string): string {
+  if (value === EMPTY_FILTER_VALUE) {
+    return value;
+  }
+
+  const normalized = value.trim();
+  if (normalized === '') {
+    return normalized;
+  }
+
+  const lowered = normalized.toLowerCase();
+  if (lowered === 'empty' || lowered === '(empty)' || lowered === '[empty]' || lowered === 'no value') {
+    return EMPTY_FILTER_VALUE;
+  }
+
+  return normalized;
+}
+
+function compareFilterValue(a: string, b: string): number {
+  if (a === b) {
+    return 0;
+  }
+  if (a === EMPTY_FILTER_VALUE) {
+    return 1;
+  }
+  if (b === EMPTY_FILTER_VALUE) {
+    return -1;
+  }
+  return a.localeCompare(b, undefined, { sensitivity: 'base' });
+}
+
+function buildSort(sortKey?: AssetSortKey | '', sortDirection?: AssetSortDirection): AssetListSort {
+  let key: AssetSortKey = 'entry_date';
+  if (sortKey) {
+    key = sortKey;
+  }
+
+  return {
+    key,
+    direction: normalizeSortDirection(sortDirection),
+  };
+}
+
+function normalizeSortDirection(direction?: AssetSortDirection): AssetSortDirection {
+  return direction === 'asc' ? 'asc' : 'desc';
+}
 
 const getStyles = (theme: GrafanaTheme2) => {
   return {
