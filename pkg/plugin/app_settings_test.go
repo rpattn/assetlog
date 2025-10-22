@@ -67,11 +67,20 @@ func TestNewAppUsesPersistedSettingsWhenGrafanaResets(t *testing.T) {
 		t.Fatalf("NewApp returned error: %v", err)
 	}
 	app := inst.(*App)
+	initialPersisted, err := app.loadPersistedAppSettings(context.Background(), orgID)
+	if err != nil {
+		t.Fatalf("loadPersistedAppSettings returned error: %v", err)
+	}
+	if initialPersisted == nil {
+		t.Fatalf("expected persisted settings to be stored")
+	}
 	app.Dispose()
 
 	// Simulate Grafana restarting the plugin with default/empty settings.
 	resetCtx := backend.WithPluginContext(context.Background(), backend.PluginContext{OrgID: orgID})
-	resetSettings := backend.AppInstanceSettings{}
+	resetSettings := backend.AppInstanceSettings{
+		JSONData: []byte(`{"apiUrl":"http://default-url.com","bucketName":"default-bucket","objectPrefix":"uploads/","maxUploadSizeMb":25}`),
+	}
 
 	inst2, err := NewApp(resetCtx, resetSettings)
 	if err != nil {
@@ -88,6 +97,23 @@ func TestNewAppUsesPersistedSettingsWhenGrafanaResets(t *testing.T) {
 	}
 	if app2.config.APIKey != "initial-key" {
 		t.Fatalf("expected api key to be restored from persisted settings")
+	}
+
+	persistedAfter, err := app2.loadPersistedAppSettings(context.Background(), orgID)
+	if err != nil {
+		t.Fatalf("loadPersistedAppSettings after reset returned error: %v", err)
+	}
+	if persistedAfter == nil {
+		t.Fatalf("expected persisted settings to exist after restart")
+	}
+	if string(persistedAfter.JSONData) != string(initialPersisted.JSONData) {
+		t.Fatalf("expected persisted JSON to remain unchanged, got %s", string(persistedAfter.JSONData))
+	}
+	if persistedAfter.SecureJSONData["apiKey"] != "initial-key" {
+		t.Fatalf("expected persisted api key to remain unchanged, got %q", persistedAfter.SecureJSONData["apiKey"])
+	}
+	if !initialPersisted.UpdatedAt.IsZero() && !persistedAfter.UpdatedAt.Equal(initialPersisted.UpdatedAt) {
+		t.Fatalf("expected persisted updated_at to remain unchanged")
 	}
 }
 

@@ -123,6 +123,41 @@ func mergeAppInstanceSettings(settings backend.AppInstanceSettings, persisted *p
 	return merged
 }
 
+func persistedToAppInstanceSettings(p *persistedAppSettings, apiVersion int) backend.AppInstanceSettings {
+	if p == nil {
+		return backend.AppInstanceSettings{APIVersion: apiVersion}
+	}
+	return backend.AppInstanceSettings{
+		JSONData:                append([]byte(nil), p.JSONData...),
+		DecryptedSecureJSONData: copyStringMap(p.SecureJSONData),
+		Updated:                 p.UpdatedAt,
+		APIVersion:              apiVersion,
+	}
+}
+
+func hasNonEmptySettings(settings backend.AppInstanceSettings) bool {
+	if len(settings.JSONData) > 0 {
+		return true
+	}
+	return len(settings.DecryptedSecureJSONData) > 0
+}
+
+func shouldPersistUpdate(settings backend.AppInstanceSettings, persisted *persistedAppSettings) bool {
+	if persisted == nil {
+		return hasNonEmptySettings(settings)
+	}
+	if !hasNonEmptySettings(settings) {
+		return false
+	}
+	if settings.Updated.IsZero() {
+		return false
+	}
+	if persisted.UpdatedAt.IsZero() {
+		return true
+	}
+	return settings.Updated.After(persisted.UpdatedAt)
+}
+
 func copyStringMap(src map[string]string) map[string]string {
 	if len(src) == 0 {
 		return nil
