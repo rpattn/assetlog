@@ -1,8 +1,11 @@
 package plugin
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -114,6 +117,112 @@ func TestNewAppUsesPersistedSettingsWhenGrafanaResets(t *testing.T) {
 	}
 	if !initialPersisted.UpdatedAt.IsZero() && !persistedAfter.UpdatedAt.Equal(initialPersisted.UpdatedAt) {
 		t.Fatalf("expected persisted updated_at to remain unchanged")
+	}
+}
+
+func TestNewAppSkipsProvisionedDefaultsAfterUserUpdate(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "assets.db")
+	t.Setenv("SQLITE_PATH", dbPath)
+	t.Setenv(envForceLocalStorage, "1")
+
+	orgID := int64(1)
+	ctx := backend.WithPluginContext(context.Background(), backend.PluginContext{OrgID: orgID})
+
+	provisioned := backend.AppInstanceSettings{
+		JSONData: []byte(`{"apiUrl":"http://default-url.com","bucketName":"assetlog-dev-bucket","objectPrefix":"uploads/","maxUploadSizeMb":25}`),
+		DecryptedSecureJSONData: map[string]string{
+			"apiKey":            "default-key",
+			"gcsServiceAccount": `{"type":"service_account"}`,
+		},
+	}
+
+	inst, err := NewApp(ctx, provisioned)
+	if err != nil {
+		t.Fatalf("initial NewApp returned error: %v", err)
+	}
+	app := inst.(*App)
+
+	persistedSeed, err := app.loadPersistedAppSettings(context.Background(), orgID)
+	if err != nil {
+		t.Fatalf("loadPersistedAppSettings returned error: %v", err)
+	}
+	if persistedSeed == nil {
+		t.Fatalf("expected provisioned settings to be persisted on first run")
+	}
+	app.Dispose()
+
+	updatedTime := time.Now().UTC().Add(time.Minute)
+	updated := backend.AppInstanceSettings{
+		JSONData: []byte(`{"apiUrl":"https://custom.example","bucketName":"user-bucket","objectPrefix":"custom/","maxUploadSizeMb":42}`),
+		DecryptedSecureJSONData: map[string]string{
+			"apiKey": "custom-key",
+		},
+		Updated: updatedTime,
+	}
+
+	inst2, err := NewApp(ctx, updated)
+	if err != nil {
+		t.Fatalf("updated NewApp returned error: %v", err)
+	}
+	app2 := inst2.(*App)
+
+	persistedUser, err := app2.loadPersistedAppSettings(context.Background(), orgID)
+	if err != nil {
+		t.Fatalf("loadPersistedAppSettings after update returned error: %v", err)
+	}
+	if persistedUser == nil {
+		t.Fatalf("expected persisted settings to exist after user update")
+	}
+	app2.Dispose()
+
+	restartCtx := backend.WithPluginContext(context.Background(), backend.PluginContext{OrgID: orgID})
+	restartDefaults := backend.AppInstanceSettings{
+		JSONData:                provisioned.JSONData,
+		DecryptedSecureJSONData: provisioned.DecryptedSecureJSONData,
+		Updated:                 updatedTime.Add(5 * time.Minute),
+	}
+
+	inst3, err := NewApp(restartCtx, restartDefaults)
+	if err != nil {
+		t.Fatalf("restart NewApp returned error: %v", err)
+	}
+	app3 := inst3.(*App)
+	defer app3.Dispose()
+
+	persistedFinal, err := app3.loadPersistedAppSettings(context.Background(), orgID)
+	if err != nil {
+		t.Fatalf("loadPersistedAppSettings after restart returned error: %v", err)
+	}
+	if persistedFinal == nil {
+		t.Fatalf("expected persisted settings after restart")
+	}
+
+	cfg, err := parseConfig(backend.AppInstanceSettings{
+		JSONData:                persistedFinal.JSONData,
+		DecryptedSecureJSONData: persistedFinal.SecureJSONData,
+	})
+	if err != nil {
+		t.Fatalf("parse persisted config failed: %v", err)
+	}
+
+	if cfg.APIURL != "https://custom.example" {
+		t.Fatalf("expected persisted API URL to remain custom, got %q", cfg.APIURL)
+	}
+	if cfg.Storage.Bucket != "user-bucket" {
+		t.Fatalf("expected persisted bucket to remain custom, got %q", cfg.Storage.Bucket)
+	}
+	if cfg.APIKey != "custom-key" {
+		t.Fatalf("expected persisted API key to remain custom, got %q", cfg.APIKey)
+	}
+
+	if !jsonEqualForTest(persistedFinal.ProvisionedJSONData, provisioned.JSONData) {
+		t.Fatalf("expected provisioned JSON to match defaults")
+	}
+	if !mapsEqualForTest(persistedFinal.ProvisionedSecureJSONData, provisioned.DecryptedSecureJSONData) {
+		t.Fatalf("expected provisioned secure JSON to match defaults")
+	}
+	if !persistedUser.UpdatedAt.IsZero() && !persistedFinal.UpdatedAt.Equal(persistedUser.UpdatedAt) {
+		t.Fatalf("expected persisted updated_at to remain unchanged after restart")
 	}
 }
 
@@ -240,4 +349,37 @@ func TestNewAppHandlesStorageInitErrorsGracefully(t *testing.T) {
 	if !strings.Contains(res.Message, "storage initialization failed") {
 		t.Fatalf("expected health message to mention storage failure, got %q", res.Message)
 	}
+}
+
+func jsonEqualForTest(a, b []byte) bool {
+	if len(bytes.TrimSpace(a)) == 0 && len(bytes.TrimSpace(b)) == 0 {
+		return true
+	}
+
+	var va interface{}
+	if err := json.Unmarshal(a, &va); err != nil {
+		return bytes.Equal(bytes.TrimSpace(a), bytes.TrimSpace(b))
+	}
+
+	var vb interface{}
+	if err := json.Unmarshal(b, &vb); err != nil {
+		return false
+	}
+
+	return reflect.DeepEqual(va, vb)
+}
+
+func mapsEqualForTest(a, b map[string]string) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
 }

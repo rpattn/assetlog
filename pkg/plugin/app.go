@@ -60,6 +60,9 @@ func NewApp(ctx context.Context, settings backend.AppInstanceSettings) (instance
 			} else {
 				effectiveSettings = mergeAppInstanceSettings(settings, nil)
 			}
+		case isProvisionedFallback(settings, persisted):
+			effectiveSettings = persistedToAppInstanceSettings(persisted, settings.APIVersion)
+			log.Printf("ignoring provisioned app settings for org %d in favor of persisted configuration", pluginCtx.OrgID)
 		case shouldPersistUpdate(settings, persisted):
 			candidate := mergeAppInstanceSettings(settings, persisted)
 			persistCandidate = &candidate
@@ -77,7 +80,7 @@ func NewApp(ctx context.Context, settings backend.AppInstanceSettings) (instance
 	if pluginCtx.OrgID != 0 {
 		switch {
 		case persistCandidate != nil:
-			if err := a.savePersistedAppSettings(ctx, pluginCtx.OrgID, *persistCandidate); err != nil {
+			if err := a.savePersistedAppSettings(ctx, pluginCtx.OrgID, *persistCandidate, persisted); err != nil {
 				log.Printf("persist app settings for org %d failed: %v", pluginCtx.OrgID, err)
 			} else if persisted == nil {
 				log.Printf("persisted app settings for org %d", pluginCtx.OrgID)
