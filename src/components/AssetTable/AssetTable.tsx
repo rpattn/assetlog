@@ -88,7 +88,6 @@ export const AssetTable = ({
   const showPagination = Boolean(onPageChange);
 
   const [activeFilter, setActiveFilter] = useState<{ key: FilterKey; button: HTMLButtonElement | null } | null>(null);
-  const [hoveredFilter, setHoveredFilter] = useState<FilterKey | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
 
   const filterOptions = useMemo(
@@ -133,12 +132,6 @@ export const AssetTable = ({
     },
     [closeActiveFilter, filterValues, onFiltersChange]
   );
-
-  useEffect(() => {
-    if (!showFilters) {
-      setHoveredFilter(null);
-    }
-  }, [showFilters]);
 
   useEffect(() => {
     if (!activeFilter) {
@@ -229,26 +222,15 @@ export const AssetTable = ({
       }
       const isActive = Boolean(filterValues[key]?.length);
       const isOpen = activeFilter?.key === key;
-      const isHovered = hoveredFilter === key;
       return (
-        <div
-          className={styles.headerContent}
-          onMouseEnter={() => setHoveredFilter(key)}
-          onMouseLeave={() => {
-            setHoveredFilter((current) => (current === key ? null : current));
-          }}
-        >
+        <div className={styles.headerContent}>
           <span className={styles.headerLabel}>{label}</span>
           <Button
             type="button"
             variant="secondary"
             size="sm"
             icon="filter"
-            className={cx(
-              styles.filterButton,
-              (isActive || isOpen || isHovered) && styles.filterButtonVisible,
-              isActive && styles.filterButtonActive
-            )}
+            className={cx(styles.filterButton, isActive && styles.filterButtonActive)}
             title={`Filter ${label}`}
             aria-pressed={isOpen || isActive}
             aria-haspopup="dialog"
@@ -278,8 +260,6 @@ export const AssetTable = ({
       filterValues,
       handleFilterApply,
       handleFilterButtonClick,
-      hoveredFilter,
-      setHoveredFilter,
       showFilters,
       styles,
     ]
@@ -751,20 +731,10 @@ function isImageAttachment(file: AssetFile): boolean {
 const getStyles = (theme: GrafanaTheme2) => {
   const border = `1px solid ${theme.colors.border.weak}`;
   const filterButton = css`
-    opacity: 0;
-    pointer-events: none;
+    opacity: 1;
+    pointer-events: auto;
     transition: opacity 0.15s ease-in-out;
     min-width: 0;
-
-    &:focus-visible {
-      opacity: 1;
-      pointer-events: auto;
-    }
-  `;
-
-  const filterButtonVisible = css`
-    opacity: 1 !important;
-    pointer-events: auto !important;
   `;
 
   const filterButtonActive = css`
@@ -796,11 +766,6 @@ const getStyles = (theme: GrafanaTheme2) => {
       font-weight: 600;
       white-space: nowrap;
       position: relative;
-
-      &:hover .${filterButton} {
-        opacity: 1;
-        pointer-events: auto;
-      }
     `,
     td: css`
       padding: ${theme.spacing(1)};
@@ -862,12 +827,6 @@ const getStyles = (theme: GrafanaTheme2) => {
       display: flex;
       align-items: center;
       gap: ${theme.spacing(0.5)};
-
-      &:hover .${filterButton},
-      &:focus-within .${filterButton} {
-        opacity: 1;
-        pointer-events: auto;
-      }
     `,
     headerLabel: css`
       flex: 1 1 auto;
@@ -876,7 +835,6 @@ const getStyles = (theme: GrafanaTheme2) => {
       text-overflow: ellipsis;
     `,
     filterButton,
-    filterButtonVisible,
     filterButtonActive,
     filterPopover: css`
       position: absolute;
