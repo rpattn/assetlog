@@ -262,13 +262,27 @@ function PageOne() {
                       ) : (
                         <ul className={styles.attachmentList}>
                           {asset.attachments.map((file) => (
-                            <li key={file.id}>
+                            <li key={file.id} className={styles.attachmentItem}>
                               {file.url ? (
-                                <a href={file.url} target="_blank" rel="noreferrer">
-                                  {file.file_name}
+                                <a
+                                  href={file.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className={styles.attachmentLink}
+                                >
+                                  {isImageAttachment(file) && (
+                                    <span className={styles.attachmentThumbnail}>
+                                      <img
+                                        src={file.url}
+                                        alt={file.file_name}
+                                        className={styles.attachmentImage}
+                                      />
+                                    </span>
+                                  )}
+                                  <span className={styles.attachmentName}>{file.file_name}</span>
                                 </a>
                               ) : (
-                                <span>{file.file_name}</span>
+                                <span className={styles.attachmentName}>{file.file_name}</span>
                               )}
                             </li>
                           ))}
@@ -356,6 +370,33 @@ function PageOne() {
 
 export default PageOne;
 
+const IMAGE_EXTENSIONS = new Set([
+  'avif',
+  'bmp',
+  'gif',
+  'ico',
+  'jpeg',
+  'jpg',
+  'png',
+  'svg',
+  'tif',
+  'tiff',
+  'webp',
+]);
+
+function isImageAttachment(file: AssetFile): boolean {
+  if (file.content_type?.startsWith('image/')) {
+    return true;
+  }
+
+  const extensionMatch = file.file_name.match(/\.([^.]+)$/);
+  if (!extensionMatch) {
+    return false;
+  }
+
+  return IMAGE_EXTENSIONS.has(extensionMatch[1].toLowerCase());
+}
+
 function sortAssets(records: AssetRecord[]): AssetRecord[] {
   return [...records].sort((a, b) => {
     const date = b.entry_date.localeCompare(a.entry_date);
@@ -435,10 +476,46 @@ const getStyles = (theme: GrafanaTheme2) => {
     `,
     attachmentList: css`
       margin: 0;
-      padding-left: ${theme.spacing(2)};
+      padding: 0;
       display: flex;
       flex-direction: column;
       gap: ${theme.spacing(0.5)};
+    `,
+    attachmentItem: css`
+      list-style: none;
+    `,
+    attachmentLink: css`
+      display: inline-flex;
+      align-items: center;
+      gap: ${theme.spacing(1)};
+      text-decoration: none;
+      color: ${theme.colors.text.link};
+
+      &:hover,
+      &:focus {
+        text-decoration: underline;
+      }
+    `,
+    attachmentThumbnail: css`
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 64px;
+      height: 48px;
+      border-radius: 2px;
+      overflow: hidden;
+      background: ${theme.colors.background.secondary};
+      border: ${border};
+      flex-shrink: 0;
+    `,
+    attachmentImage: css`
+      display: block;
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+    `,
+    attachmentName: css`
+      overflow-wrap: anywhere;
     `,
     actionsCell: css`
       display: flex;
