@@ -211,6 +211,55 @@ export const AssetTable = ({
     rangeEnd = Math.min(totalRecords, safePage * safePageSize);
   }
 
+  const renderHeader = useCallback(
+    (label: string, key?: FilterKey) => {
+      if (!key || !showFilters) {
+        return (
+          <div className={styles.headerContent}>
+            <span className={styles.headerLabel}>{label}</span>
+          </div>
+        );
+      }
+      const isActive = Boolean(filterValues[key]?.length);
+      const isOpen = activeFilter?.key === key;
+      return (
+        <div className={styles.headerContent}>
+          <span className={styles.headerLabel}>{label}</span>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            icon="filter"
+            className={cx(
+              styles.filterButton,
+              (isActive || isOpen) && styles.filterButtonVisible,
+              isActive && styles.filterButtonActive
+            )}
+            title={`Filter ${label}`}
+            aria-pressed={isOpen || isActive}
+            aria-haspopup="dialog"
+            onClick={(event) => handleFilterButtonClick(key, event.currentTarget)}
+          />
+          {isOpen && (
+            <FilterMenu
+              key={key}
+              ref={(element) => {
+                popoverRef.current = element;
+              }}
+              label={label}
+              options={filterOptions[key] ?? []}
+              selectedValues={filterValues[key]}
+              onApply={(values) => handleFilterApply(key, values)}
+              onClose={closeActiveFilter}
+              styles={styles}
+            />
+          )}
+        </div>
+      );
+    },
+    [activeFilter, closeActiveFilter, filterOptions, filterValues, handleFilterApply, handleFilterButtonClick, showFilters, styles]
+  );
+
   const columns = useMemo(
     () =>
       [
@@ -337,55 +386,6 @@ export const AssetTable = ({
     }
     return `Showing ${rangeStart}–${rangeEnd} of ${totalRecords} assets`;
   })();
-
-  const renderHeader = useCallback(
-    (label: string, key?: FilterKey) => {
-      if (!key || !showFilters) {
-        return (
-          <div className={styles.headerContent}>
-            <span className={styles.headerLabel}>{label}</span>
-          </div>
-        );
-      }
-      const isActive = Boolean(filterValues[key]?.length);
-      const isOpen = activeFilter?.key === key;
-      return (
-        <div className={styles.headerContent}>
-          <span className={styles.headerLabel}>{label}</span>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            icon="filter"
-            className={cx(
-              styles.filterButton,
-              (isActive || isOpen) && styles.filterButtonVisible,
-              isActive && styles.filterButtonActive
-            )}
-            title={`Filter ${label}`}
-            aria-pressed={isOpen || isActive}
-            aria-haspopup="dialog"
-            onClick={(event) => handleFilterButtonClick(key, event.currentTarget)}
-          />
-          {isOpen && (
-            <FilterMenu
-              key={key}
-              ref={(element) => {
-                popoverRef.current = element;
-              }}
-              label={label}
-              options={filterOptions[key] ?? []}
-              selectedValues={filterValues[key]}
-              onApply={(values) => handleFilterApply(key, values)}
-              onClose={closeActiveFilter}
-              styles={styles}
-            />
-          )}
-        </div>
-      );
-    },
-    [activeFilter, closeActiveFilter, filterOptions, filterValues, handleFilterApply, handleFilterButtonClick, showFilters, styles]
-  );
 
   return (
     <div className={cx(styles.container, className)} data-testid={testId}>
