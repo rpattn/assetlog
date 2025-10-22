@@ -161,7 +161,12 @@ func shouldPreferPersistedSettings(settings backend.AppInstanceSettings, persist
 	if settings.Updated.IsZero() {
 		return true
 	}
-	return persisted.UpdatedAt.After(settings.Updated)
+	// Prefer the persisted settings whenever they are at least as recent as the
+	// payload provided by Grafana. This covers the Grafana restart case where the
+	// runtime provides default settings with the same Updated timestamp that was
+	// already stored in SQLite. In that scenario we should keep the previously
+	// persisted values instead of overwriting them with defaults.
+	return !persisted.UpdatedAt.Before(settings.Updated)
 }
 
 func mergeConfigWithPersisted(current Config, persisted Config, preferPersisted bool) Config {

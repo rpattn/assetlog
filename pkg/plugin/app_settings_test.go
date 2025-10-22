@@ -197,3 +197,65 @@ func TestPersistedSettingsRetainSecretsOnPartialUpdates(t *testing.T) {
 		t.Fatalf("expected persisted JSON to contain updated bucket, got %s", persisted.JSONData)
 	}
 }
+
+func TestPersistedSettingsNotOverwrittenWhenGrafanaProvidesDefaults(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "assets.db")
+	t.Setenv("SQLITE_PATH", dbPath)
+	t.Setenv(envForceLocalStorage, "1")
+
+	orgID := int64(501)
+	baseTime := time.Now().UTC().Add(-2 * time.Hour)
+	ctx := backend.WithPluginContext(context.Background(), backend.PluginContext{OrgID: orgID})
+
+	initialSettings := backend.AppInstanceSettings{
+		JSONData: []byte(`{"apiUrl":"https://persisted","bucketName":"persisted-bucket","objectPrefix":"org/","maxUploadSizeMb":48}`),
+		DecryptedSecureJSONData: map[string]string{
+			"apiKey":            "persisted-api-key",
+			"gcsServiceAccount": `{"client_email":"persisted@example.com","private_key":"-----BEGIN PRIVATE KEY-----\nABC\n-----END PRIVATE KEY-----\n"}`,
+		},
+		Updated: baseTime,
+	}
+
+	inst, err := NewApp(ctx, initialSettings)
+	if err != nil {
+		t.Fatalf("NewApp returned error: %v", err)
+	}
+	app := inst.(*App)
+	app.Dispose()
+
+	// Grafana restarts the plugin and supplies defaults from app.yaml. These defaults
+	// often have the same Updated timestamp that was previously stored, so the plugin
+	// must not overwrite the persisted settings when that happens.
+	defaultSettings := backend.AppInstanceSettings{
+		JSONData: []byte(`{"apiUrl":"","bucketName":"","objectPrefix":"","maxUploadSizeMb":25}`),
+		Updated:  baseTime,
+	}
+
+	inst2, err := NewApp(ctx, defaultSettings)
+	if err != nil {
+		t.Fatalf("NewApp with defaults returned error: %v", err)
+	}
+	app2 := inst2.(*App)
+	defer app2.Dispose()
+
+	if app2.config.Storage.Bucket != "persisted-bucket" {
+		t.Fatalf("expected bucket to remain persisted, got %q", app2.config.Storage.Bucket)
+	}
+	if app2.config.APIKey != "persisted-api-key" {
+		t.Fatalf("expected API key to remain persisted, got %q", app2.config.APIKey)
+	}
+
+	persisted, err := app2.loadPersistedAppSettings(context.Background(), orgID)
+	if err != nil {
+		t.Fatalf("loadPersistedAppSettings returned error: %v", err)
+	}
+	if persisted == nil {
+		t.Fatalf("expected persisted settings to exist")
+	}
+	if !strings.Contains(string(persisted.JSONData), "persisted-bucket") {
+		t.Fatalf("expected persisted JSON to keep original bucket, got %s", persisted.JSONData)
+	}
+	if persisted.SecureJSONData["gcsServiceAccount"] == "" {
+		t.Fatalf("expected persisted secure JSON to remain populated")
+	}
+}
