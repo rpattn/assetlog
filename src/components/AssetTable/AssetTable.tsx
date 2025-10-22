@@ -881,6 +881,12 @@ const getStyles = (theme: GrafanaTheme2) => {
       font-weight: 600;
       white-space: nowrap;
       position: relative;
+
+      &:hover .${filterButton},
+      &:focus-within .${filterButton} {
+        opacity: 1;
+        pointer-events: auto;
+      }
     `,
     td: css`
       padding: ${theme.spacing(1)};
@@ -942,12 +948,7 @@ const getStyles = (theme: GrafanaTheme2) => {
       display: flex;
       align-items: center;
       gap: ${theme.spacing(0.5)};
-
-      &:hover .${filterButton},
-      &:focus-within .${filterButton} {
-        opacity: 1;
-        pointer-events: auto;
-      }
+      width: 100%;
     `,
     headerLabel: css`
       flex: 1 1 auto;
