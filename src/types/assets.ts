@@ -44,3 +44,9 @@ export interface AssetPayload {
   pitch: number;
   roll: number;
 }
+
+export interface AssetListMeta {
+  storageConfigured: boolean;
+  maxUploadSizeBytes: number;
+  maxUploadSizeMb: number;
+}

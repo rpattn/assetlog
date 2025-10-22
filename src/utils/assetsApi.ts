@@ -1,41 +1,88 @@
 import { getBackendSrv, isFetchError } from '@grafana/runtime';
-import type { AssetPayload, AssetRecord } from '../types/assets';
+import type { AssetFile, AssetListMeta, AssetPayload, AssetRecord } from '../types/assets';
 
 const PLUGIN_ID = 'rpatt-assetlog-app';
 const BASE_URL = `/api/plugins/${PLUGIN_ID}/resources/assets`;
 
 interface ListResponse {
   data: AssetRecord[];
+  meta?: AssetListMeta;
 }
 
-interface ItemResponse {
-  data: AssetRecord;
+interface ItemResponse<T> {
+  data: T;
 }
 
-export async function fetchAssets(): Promise<AssetRecord[]> {
+export interface AssetListResult {
+  assets: AssetRecord[];
+  meta: AssetListMeta;
+}
+
+export async function fetchAssets(): Promise<AssetListResult> {
   const backend = tryGetBackendSrv();
   if (!backend) {
-    return [];
+    return {
+      assets: [],
+      meta: { storageConfigured: false, maxUploadSizeBytes: 0, maxUploadSizeMb: 0 },
+    };
   }
   const response = await backend.get<ListResponse>(BASE_URL, undefined, undefined, { showErrorAlert: false });
-  return response?.data ?? [];
+  const meta: AssetListMeta = response?.meta ?? {
+    storageConfigured: false,
+    maxUploadSizeBytes: 0,
+    maxUploadSizeMb: 0,
+  };
+  return {
+    assets: response?.data ?? [],
+    meta,
+  };
 }
 
 export async function createAsset(payload: AssetPayload): Promise<AssetRecord> {
   const backend = getBackendOrThrow();
-  const response = await backend.post<ItemResponse>(BASE_URL, payload, { showErrorAlert: false });
+  const response = await backend.post<ItemResponse<AssetRecord>>(BASE_URL, payload, { showErrorAlert: false });
   return response.data;
 }
 
 export async function updateAsset(assetId: number, payload: AssetPayload): Promise<AssetRecord> {
   const backend = getBackendOrThrow();
-  const response = await backend.put<ItemResponse>(`${BASE_URL}/${assetId}`, payload, { showErrorAlert: false });
+  const response = await backend.put<ItemResponse<AssetRecord>>(`${BASE_URL}/${assetId}`, payload, { showErrorAlert: false });
   return response.data;
 }
 
 export async function deleteAsset(assetId: number): Promise<void> {
   const backend = getBackendOrThrow();
   await backend.delete(`${BASE_URL}/${assetId}`, undefined, { showErrorAlert: false });
+}
+
+export async function uploadAttachment(assetId: number, file: File, signal?: AbortSignal): Promise<AssetFile> {
+  const form = new FormData();
+  form.append('file', file);
+
+  const response = await fetch(`${BASE_URL}/${assetId}/files`, {
+    method: 'POST',
+    body: form,
+    credentials: 'same-origin',
+    signal,
+  });
+
+  if (!response.ok) {
+    throw await buildResponseError(response);
+  }
+
+  const payload = (await response.json()) as ItemResponse<AssetFile>;
+  return payload.data;
+}
+
+export async function deleteAttachment(assetId: number, fileId: number): Promise<void> {
+  const response = await fetch(`${BASE_URL}/${assetId}/files/${fileId}`, {
+    method: 'DELETE',
+    credentials: 'same-origin',
+  });
+
+  if (!response.ok) {
+    throw await buildResponseError(response);
+  }
 }
 
 export function toErrorMessage(error: unknown): string {
@@ -66,6 +113,37 @@ export function toErrorMessage(error: unknown): string {
   }
 
   return 'Unexpected error';
+}
+
+async function buildResponseError(response: Response): Promise<Error> {
+  let bodyText: string | undefined;
+  try {
+    const data = await response.clone().json();
+    if (typeof data === 'string' && data.trim() !== '') {
+      bodyText = data.trim();
+    } else if (data && typeof data === 'object') {
+      if (typeof (data as { message?: string }).message === 'string' && (data as { message?: string }).message!.trim() !== '') {
+        bodyText = (data as { message: string }).message.trim();
+      } else if (
+        typeof (data as { error?: string }).error === 'string' &&
+        (data as { error?: string }).error!.trim() !== ''
+      ) {
+        bodyText = (data as { error: string }).error.trim();
+      }
+    }
+  } catch (err) {
+    try {
+      bodyText = (await response.clone().text()).trim();
+    } catch (ignored) {
+      // ignore
+    }
+  }
+
+  const message =
+    bodyText && bodyText.length > 0
+      ? bodyText
+      : response.statusText || `request failed with status ${response.status}`;
+  return new Error(message);
 }
 
 function tryGetBackendSrv() {

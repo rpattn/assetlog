@@ -83,7 +83,8 @@ func TestCallResource(t *testing.T) {
 			verify: func(t *testing.T, resp *backend.CallResourceResponse) {
 				t.Helper()
 				var payload struct {
-					Data []AssetRecord `json:"data"`
+					Data []AssetRecord          `json:"data"`
+					Meta map[string]interface{} `json:"meta"`
 				}
 				if err := json.Unmarshal(resp.Body, &payload); err != nil {
 					t.Fatalf("decode response: %v", err)
@@ -93,6 +94,35 @@ func TestCallResource(t *testing.T) {
 				}
 				if payload.Data[0].CreatedAt == "" {
 					t.Fatalf("expected created_at to be populated")
+				}
+				if payload.Meta == nil {
+					t.Fatalf("expected meta to be present")
+				}
+				if _, ok := payload.Meta["storageConfigured"]; !ok {
+					t.Fatalf("expected storageConfigured in meta")
+				}
+				if _, ok := payload.Meta["maxUploadSizeBytes"]; !ok {
+					t.Fatalf("expected maxUploadSizeBytes in meta")
+				}
+			},
+		},
+		{
+			name:          "get app settings 200",
+			method:        http.MethodGet,
+			path:          "app-settings",
+			pluginContext: backend.PluginContext{OrgID: 1},
+			expStatus:     http.StatusOK,
+			verify: func(t *testing.T, resp *backend.CallResourceResponse) {
+				t.Helper()
+				var payload map[string]interface{}
+				if err := json.Unmarshal(resp.Body, &payload); err != nil {
+					t.Fatalf("decode response: %v", err)
+				}
+				if payload["jsonData"] == nil {
+					t.Fatalf("expected jsonData in response")
+				}
+				if payload["secureJsonFields"] == nil {
+					t.Fatalf("expected secureJsonFields in response")
 				}
 			},
 		},

@@ -1,4 +1,4 @@
-import React, { ChangeEvent, useState } from 'react';
+import React, { ChangeEvent, useEffect, useState } from 'react';
 import { lastValueFrom } from 'rxjs';
 import { css } from '@emotion/css';
 import { AppPluginMeta, GrafanaTheme2, PluginConfigPageProps, PluginMeta } from '@grafana/data';
@@ -11,6 +11,23 @@ type AppPluginSettings = {
   bucketName?: string;
   objectPrefix?: string;
   maxUploadSizeMb?: number;
+};
+
+type PersistedAppSettingsResponse = {
+  jsonData?: {
+    apiUrl?: string;
+    bucketName?: string;
+    objectPrefix?: string;
+    maxUploadSizeMb?: number;
+  };
+  secureJsonFields?: {
+    apiKey?: boolean;
+    gcsServiceAccount?: boolean;
+  };
+  storage?: {
+    configured?: boolean;
+    error?: string;
+  };
 };
 
 type State = {
@@ -53,6 +70,64 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
     serviceAccount: '',
     isServiceAccountSet: Boolean(secureJsonFields?.gcsServiceAccount),
   });
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadPersistedSettings = async () => {
+      try {
+        const response = await getBackendSrv().get<PersistedAppSettingsResponse>(
+          `/api/plugins/${plugin.meta.id}/resources/app-settings`,
+          undefined,
+          undefined,
+          { showErrorAlert: false }
+        );
+
+        if (!isMounted || !response) {
+          return;
+        }
+
+        setState((prev) => {
+          const next = { ...prev };
+          const persisted = response.jsonData ?? {};
+          if (typeof persisted.apiUrl === 'string') {
+            next.apiUrl = persisted.apiUrl;
+          }
+          if (typeof persisted.bucketName === 'string') {
+            next.bucketName = persisted.bucketName;
+          }
+          if (typeof persisted.objectPrefix === 'string') {
+            next.objectPrefix = persisted.objectPrefix;
+          }
+          if (
+            typeof persisted.maxUploadSizeMb === 'number' &&
+            Number.isFinite(persisted.maxUploadSizeMb) &&
+            persisted.maxUploadSizeMb > 0
+          ) {
+            next.maxUploadSizeMb = String(persisted.maxUploadSizeMb);
+          }
+
+          const secureFields = response.secureJsonFields ?? {};
+          if (typeof secureFields.apiKey === 'boolean') {
+            next.isApiKeySet = secureFields.apiKey;
+          }
+          if (typeof secureFields.gcsServiceAccount === 'boolean') {
+            next.isServiceAccountSet = secureFields.gcsServiceAccount;
+          }
+
+          return next;
+        });
+      } catch (error) {
+        console.error('Failed to load persisted app settings', error);
+      }
+    };
+
+    loadPersistedSettings();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [plugin.meta.id]);
 
   const parsedMaxUploadSize = Number(state.maxUploadSizeMb);
   const isUploadSizeValid =
