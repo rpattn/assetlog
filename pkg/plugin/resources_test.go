@@ -82,10 +82,7 @@ func TestCallResource(t *testing.T) {
 			expStatus:     http.StatusOK,
 			verify: func(t *testing.T, resp *backend.CallResourceResponse) {
 				t.Helper()
-				var payload struct {
-					Data []AssetRecord          `json:"data"`
-					Meta map[string]interface{} `json:"meta"`
-				}
+				var payload assetListResponse
 				if err := json.Unmarshal(resp.Body, &payload); err != nil {
 					t.Fatalf("decode response: %v", err)
 				}
@@ -95,14 +92,23 @@ func TestCallResource(t *testing.T) {
 				if payload.Data[0].CreatedAt == "" {
 					t.Fatalf("expected created_at to be populated")
 				}
-				if payload.Meta == nil {
-					t.Fatalf("expected meta to be present")
-				}
-				if _, ok := payload.Meta["storageConfigured"]; !ok {
-					t.Fatalf("expected storageConfigured in meta")
-				}
-				if _, ok := payload.Meta["maxUploadSizeBytes"]; !ok {
+				if payload.Meta.MaxUploadSizeBytes == 0 {
 					t.Fatalf("expected maxUploadSizeBytes in meta")
+				}
+				if payload.Meta.Page < 1 {
+					t.Fatalf("expected page to be >= 1, got %d", payload.Meta.Page)
+				}
+				if payload.Meta.PageSize <= 0 {
+					t.Fatalf("expected page size > 0, got %d", payload.Meta.PageSize)
+				}
+				if payload.Meta.TotalCount < int64(len(payload.Data)) {
+					t.Fatalf("expected total count >= returned records, got %d", payload.Meta.TotalCount)
+				}
+				if payload.Meta.Filters == nil {
+					t.Fatalf("expected filters map to be present")
+				}
+				if payload.Meta.PageCount < 1 {
+					t.Fatalf("expected page count >= 1, got %d", payload.Meta.PageCount)
 				}
 			},
 		},

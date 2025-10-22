@@ -1,5 +1,13 @@
 import { getBackendSrv, isFetchError } from '@grafana/runtime';
-import type { AssetFile, AssetListMeta, AssetPayload, AssetRecord } from '../types/assets';
+import type {
+  AssetFile,
+  AssetFilterKey,
+  AssetListFilters,
+  AssetListMeta,
+  AssetPayload,
+  AssetRecord,
+} from '../types/assets';
+import { EMPTY_FILTER_VALUE } from '../types/assets';
 
 const PLUGIN_ID = 'rpatt-assetlog-app';
 const BASE_URL = `/api/plugins/${PLUGIN_ID}/resources/assets`;
@@ -18,20 +26,24 @@ export interface AssetListResult {
   meta: AssetListMeta;
 }
 
-export async function fetchAssets(): Promise<AssetListResult> {
+export interface AssetListQuery {
+  page?: number;
+  pageSize?: number;
+  filters?: AssetListFilters;
+}
+
+export async function fetchAssets(query?: AssetListQuery): Promise<AssetListResult> {
   const backend = tryGetBackendSrv();
   if (!backend) {
     return {
       assets: [],
-      meta: { storageConfigured: false, maxUploadSizeBytes: 0, maxUploadSizeMb: 0 },
+      meta: getDefaultMeta(),
     };
   }
-  const response = await backend.get<ListResponse>(BASE_URL, undefined, undefined, { showErrorAlert: false });
-  const meta: AssetListMeta = response?.meta ?? {
-    storageConfigured: false,
-    maxUploadSizeBytes: 0,
-    maxUploadSizeMb: 0,
-  };
+  const url = buildListURL(query);
+  const response = await backend.get<ListResponse>(url, undefined, undefined, { showErrorAlert: false });
+  const meta: AssetListMeta = response?.meta ?? getDefaultMeta();
+  meta.filters = normalizeFilters(meta.filters);
   return {
     assets: response?.data ?? [],
     meta,
@@ -144,6 +156,105 @@ async function buildResponseError(response: Response): Promise<Error> {
       ? bodyText
       : response.statusText || `request failed with status ${response.status}`;
   return new Error(message);
+}
+
+function buildListURL(query?: AssetListQuery): string {
+  if (!query) {
+    return BASE_URL;
+  }
+  const params = new URLSearchParams();
+  if (query.page && query.page > 0) {
+    params.set('page', String(query.page));
+  }
+  if (query.pageSize && query.pageSize > 0) {
+    params.set('pageSize', String(query.pageSize));
+  }
+  if (query.filters) {
+    Object.entries(query.filters).forEach(([key, value]) => {
+      if (Array.isArray(value)) {
+        value.forEach((item) => {
+          const normalized = normalizeFilterValue(item);
+          if (normalized) {
+            params.append(`filter[${key}]`, normalized);
+          }
+        });
+        return;
+      }
+      if (typeof value === 'string') {
+        const normalized = normalizeFilterValue(value);
+        if (normalized) {
+          params.append(`filter[${key}]`, normalized);
+        }
+      }
+    });
+  }
+  const queryString = params.toString();
+  if (!queryString) {
+    return BASE_URL;
+  }
+  return `${BASE_URL}?${queryString}`;
+}
+
+function getDefaultMeta(): AssetListMeta {
+  return {
+    storageConfigured: false,
+    maxUploadSizeBytes: 0,
+    maxUploadSizeMb: 0,
+    page: 1,
+    pageSize: 25,
+    pageCount: 0,
+    totalCount: 0,
+    filters: {},
+  };
+}
+
+function normalizeFilterValue(value: string): string | null {
+  if (value === EMPTY_FILTER_VALUE) {
+    return value;
+  }
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+function normalizeFilters(filters?: Record<string, string | string[] | undefined>): AssetListFilters {
+  const result: AssetListFilters = {};
+  if (!filters) {
+    return result;
+  }
+  Object.entries(filters).forEach(([key, value]) => {
+    if (!value) {
+      return;
+    }
+    const normalized = Array.isArray(value)
+      ? normalizeFilterArray(value)
+      : normalizeFilterArray([value]);
+    if (normalized.length === 0) {
+      return;
+    }
+    result[key as AssetFilterKey] = normalized;
+  });
+  return result;
+}
+
+function normalizeFilterArray(values: string[]): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const raw of values) {
+    if (raw === EMPTY_FILTER_VALUE) {
+      if (!seen.has(EMPTY_FILTER_VALUE)) {
+        seen.add(EMPTY_FILTER_VALUE);
+        normalized.push(EMPTY_FILTER_VALUE);
+      }
+      continue;
+    }
+    const trimmed = raw.trim();
+    if (trimmed === '' || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+  return normalized;
 }
 
 function tryGetBackendSrv() {

@@ -5,8 +5,10 @@ import (
 	"strings"
 )
 
+const envForceLocalStorage = "ASSETLOG_FORCE_LOCAL_STORAGE"
+
 func localStorageOverrideEnabled() bool {
-	value := strings.TrimSpace(os.Getenv("ASSETLOG_FORCE_LOCAL_STORAGE"))
+	value := strings.TrimSpace(os.Getenv(envForceLocalStorage))
 	if value == "" {
 		return false
 	}
