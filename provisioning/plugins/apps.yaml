@@ -7,5 +7,9 @@ apps:
     disabled: false
     jsonData:
       apiUrl: http://default-url.com
+      bucketName: assetlog-dev-bucket
+      objectPrefix: uploads/
+      maxUploadSizeMb: 25
     secureJsonData:
       apiKey: secret-key
+      gcsServiceAccount: '{"type":"service_account"}'

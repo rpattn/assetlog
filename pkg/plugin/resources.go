@@ -70,8 +70,9 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/ping", a.handlePing)
 	mux.HandleFunc("/echo", a.handleEcho)
 
-	// register the assets route (must match what the frontend calls)
-	mux.HandleFunc("/assets", a.assetsHandler)
+        // register the assets routes (must match what the frontend calls)
+        mux.HandleFunc("/assets", a.handleAssetsCollection)
+        mux.HandleFunc("/assets/", a.handleAssetResource)
 
 	// fallback debug handler - runs only if no other route matches.
 	// Logs the incoming path so you can see what Grafana forwards.
