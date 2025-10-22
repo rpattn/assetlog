@@ -4,14 +4,7 @@ import { GrafanaTheme2, SelectableValue } from '@grafana/data';
 import { useStyles2, Button, Input, Pagination, Select } from '@grafana/ui';
 import { createColumnHelper, flexRender, getCoreRowModel, useReactTable } from '@tanstack/react-table';
 
-import type {
-  AssetFile,
-  AssetFilterKey,
-  AssetListFilters,
-  AssetListSort,
-  AssetRecord,
-  AssetSortKey,
-} from '../../types/assets';
+import type { AssetFile, AssetListFilters, AssetListSort, AssetRecord, AssetSortKey } from '../../types/assets';
 import { EMPTY_FILTER_VALUE } from '../../types/assets';
 
 type AssetActionHandler = (asset: AssetRecord) => void;
@@ -268,6 +261,8 @@ export const AssetTable = ({
         : currentSort === 'asc'
         ? `Clear sort for ${label}`
         : `Sort ${label} descending`;
+      const sortAriaLabel = sortTitle ?? `Toggle ${label} sort`;
+      const filterAriaLabel = `Filter ${label}`;
       return (
         <div className={styles.headerContent}>
           <span className={styles.headerLabel}>{label}</span>
@@ -286,6 +281,7 @@ export const AssetTable = ({
                 }
                 className={cx(styles.sortButton, currentSort && styles.sortButtonActive)}
                 title={sortTitle}
+                aria-label={sortAriaLabel}
                 aria-pressed={Boolean(currentSort)}
                 onClick={() => handleSortToggle(sortKey)}
               />
@@ -298,7 +294,8 @@ export const AssetTable = ({
                   size="sm"
                   icon="filter"
                   className={cx(styles.filterButton, isActive && styles.filterButtonActive)}
-                  title={`Filter ${label}`}
+                  title={filterAriaLabel}
+                  aria-label={filterAriaLabel}
                   aria-pressed={isOpen || isActive}
                   aria-haspopup="dialog"
                   onClick={(event) => handleFilterButtonClick(key, event.currentTarget)}
