@@ -731,13 +731,14 @@ function isImageAttachment(file: AssetFile): boolean {
 const getStyles = (theme: GrafanaTheme2) => {
   const border = `1px solid ${theme.colors.border.weak}`;
   const filterButton = css`
-    opacity: 1;
+    opacity: 0;
     pointer-events: auto;
     transition: opacity 0.15s ease-in-out;
     min-width: 0;
   `;
 
   const filterButtonActive = css`
+    opacity: 1;
     background: ${theme.colors.action.hover};
     color: ${theme.colors.text.maxContrast};
   `;
