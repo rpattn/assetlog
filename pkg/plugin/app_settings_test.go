@@ -310,6 +310,80 @@ func TestNewAppUpdatesPersistedSettingsWithGrafanaChanges(t *testing.T) {
 	}
 }
 
+func TestNewAppKeepsCustomServiceAccountWhenProvisionedSecureDataReturns(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "assets.db")
+	t.Setenv("SQLITE_PATH", dbPath)
+	t.Setenv(envForceLocalStorage, "1")
+
+	orgID := int64(56)
+	ctx := backend.WithPluginContext(context.Background(), backend.PluginContext{OrgID: orgID})
+
+	provisioned := backend.AppInstanceSettings{
+		JSONData: []byte(`{"apiUrl":"http://default-url.com","bucketName":"assetlog-dev-bucket","objectPrefix":"uploads/","maxUploadSizeMb":25}`),
+		DecryptedSecureJSONData: map[string]string{
+			"apiKey":            "default-key",
+			"gcsServiceAccount": `{"type":"service_account","project_id":"default"}`,
+		},
+	}
+
+	inst, err := NewApp(ctx, provisioned)
+	if err != nil {
+		t.Fatalf("initial NewApp returned error: %v", err)
+	}
+	app := inst.(*App)
+	app.Dispose()
+
+	customServiceAccount := `{"type":"service_account","project_id":"custom"}`
+	updatedCtx := backend.WithPluginContext(context.Background(), backend.PluginContext{OrgID: orgID})
+	updated := backend.AppInstanceSettings{
+		JSONData: []byte(`{"apiUrl":"https://custom.example","bucketName":"custom-bucket","objectPrefix":"custom/","maxUploadSizeMb":64}`),
+		DecryptedSecureJSONData: map[string]string{
+			"apiKey":            "custom-key",
+			"gcsServiceAccount": customServiceAccount,
+		},
+		Updated: time.Now().UTC().Add(time.Minute),
+	}
+
+	inst2, err := NewApp(updatedCtx, updated)
+	if err != nil {
+		t.Fatalf("custom NewApp returned error: %v", err)
+	}
+	app2 := inst2.(*App)
+	app2.Dispose()
+
+	fallbackCtx := backend.WithPluginContext(context.Background(), backend.PluginContext{OrgID: orgID})
+	fallback := backend.AppInstanceSettings{
+		JSONData: []byte(`{"apiUrl":"https://custom.example","bucketName":"custom-bucket","objectPrefix":"custom/","maxUploadSizeMb":64}`),
+		DecryptedSecureJSONData: map[string]string{
+			"apiKey":            provisioned.DecryptedSecureJSONData["apiKey"],
+			"gcsServiceAccount": provisioned.DecryptedSecureJSONData["gcsServiceAccount"],
+		},
+		Updated: updated.Updated.Add(time.Minute),
+	}
+
+	inst3, err := NewApp(fallbackCtx, fallback)
+	if err != nil {
+		t.Fatalf("fallback NewApp returned error: %v", err)
+	}
+	app3 := inst3.(*App)
+	defer app3.Dispose()
+
+	persisted, err := app3.loadPersistedAppSettings(context.Background(), orgID)
+	if err != nil {
+		t.Fatalf("loadPersistedAppSettings returned error: %v", err)
+	}
+	if persisted == nil {
+		t.Fatalf("expected persisted settings to exist")
+	}
+
+	if persisted.SecureJSONData["gcsServiceAccount"] != customServiceAccount {
+		t.Fatalf("expected persisted service account to remain custom, got %q", persisted.SecureJSONData["gcsServiceAccount"])
+	}
+	if persisted.SecureJSONData["apiKey"] != "custom-key" {
+		t.Fatalf("expected persisted api key to remain custom, got %q", persisted.SecureJSONData["apiKey"])
+	}
+}
+
 func TestNewAppHandlesStorageInitErrorsGracefully(t *testing.T) {
 	t.Setenv("SQLITE_PATH", filepath.Join(t.TempDir(), "assets.db"))
 	// Ensure local storage override is disabled for this test.

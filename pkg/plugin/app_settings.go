@@ -143,7 +143,7 @@ func (a *App) savePersistedAppSettings(ctx context.Context, orgID int64, setting
 		provisionedSecureJSON = provisionedSecureStr
 	}
 
-	_, err := a.db.ExecContext(
+	_, err = a.db.ExecContext(
 		ctx,
 		`INSERT INTO app_settings (org_id, json_data, secure_json_data, updated_at, provisioned_json_data, provisioned_secure_json_data, provisioned_updated_at)
                  VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -187,9 +187,13 @@ func mergeAppInstanceSettings(settings backend.AppInstanceSettings, persisted *p
 	if len(persisted.SecureJSONData) > 0 {
 		if len(merged.DecryptedSecureJSONData) == 0 {
 			merged.DecryptedSecureJSONData = copyStringMap(persisted.SecureJSONData)
+		} else if len(persisted.ProvisionedSecureJSONData) > 0 &&
+			mapsEqual(merged.DecryptedSecureJSONData, persisted.ProvisionedSecureJSONData) &&
+			!mapsEqual(persisted.SecureJSONData, persisted.ProvisionedSecureJSONData) {
+			merged.DecryptedSecureJSONData = copyStringMap(persisted.SecureJSONData)
 		} else {
 			for k, v := range persisted.SecureJSONData {
-				if _, exists := merged.DecryptedSecureJSONData[k]; !exists {
+				if val, exists := merged.DecryptedSecureJSONData[k]; !exists || strings.TrimSpace(val) == "" {
 					merged.DecryptedSecureJSONData[k] = v
 				}
 			}
