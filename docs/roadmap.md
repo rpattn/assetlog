@@ -1,6 +1,12 @@
 # Asset Log MVP Roadmap
 
 ## Current State
+
+COMPLETED Implementations of phases 1-3
+
+Some items in step 4 incomplete (logging, extended tests). 
+
+## OLD State
 - The Asset Log page fetches asset records via `/api/plugins/rpatt-assetlog-app/resources/assets` and renders a read-only table without create, edit, or delete actions.​:codex-file-citation[codex-file-citation]{line_range_start=27 line_range_end=137 path=src/pages/PageOne.tsx git_url="https://github.com/rpattn/assetlog/blob/master/src/pages/PageOne.tsx#L27-L137"}​
 - The backend only exposes a GET handler for `/assets`, enforcing org scoping but lacking mutation endpoints or attachment management.​:codex-file-citation[codex-file-citation]{line_range_start=28 line_range_end=89 path=pkg/plugin/handlers.go git_url="https://github.com/rpattn/assetlog/blob/master/pkg/plugin/handlers.go#L28-L89"}​
 - Schema initialization creates a single `assets` table with a JSON-encoded `images` column; there is no table for attachment metadata or audit fields.​:codex-file-citation[codex-file-citation]{line_range_start=1 line_range_end=88 path=pkg/plugin/migrations/0001_init.sql git_url="https://github.com/rpattn/assetlog/blob/master/pkg/plugin/migrations/0001_init.sql#L1-L88"}​
