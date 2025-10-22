@@ -96,15 +96,59 @@ func (a *App) persistAppInstanceSettings(ctx context.Context, orgID int64, setti
 	if a.db == nil || orgID == 0 {
 		return nil
 	}
+
 	if existing != nil {
-		// Only overwrite existing settings when Grafana indicates an update or when new secure data is provided.
-		if len(settings.DecryptedSecureJSONData) == 0 {
-			if settings.Updated.IsZero() || !settings.Updated.After(existing.UpdatedAt) {
-				return nil
+		// When Grafana starts with stale defaults, prefer the already persisted settings unless
+		// the incoming payload is strictly newer (Grafana updates Updated timestamps on save)
+		// or carries fresh secret values we should store.
+		if len(settings.DecryptedSecureJSONData) == 0 && shouldPreferPersistedSettings(settings, existing) {
+			return nil
+		}
+	}
+
+	merged := backend.AppInstanceSettings{
+		JSONData:                append([]byte(nil), settings.JSONData...),
+		DecryptedSecureJSONData: copyStringMap(settings.DecryptedSecureJSONData),
+		Updated:                 settings.Updated,
+		APIVersion:              settings.APIVersion,
+	}
+
+	if existing != nil {
+		if len(merged.JSONData) == 0 && len(existing.JSONData) > 0 {
+			merged.JSONData = append([]byte(nil), existing.JSONData...)
+		}
+
+		if len(existing.SecureJSONData) > 0 {
+			if len(merged.DecryptedSecureJSONData) == 0 {
+				merged.DecryptedSecureJSONData = make(map[string]string, len(existing.SecureJSONData))
+				for k, v := range existing.SecureJSONData {
+					merged.DecryptedSecureJSONData[k] = v
+				}
+			} else {
+				combined := make(map[string]string, len(existing.SecureJSONData)+len(merged.DecryptedSecureJSONData))
+				for k, v := range existing.SecureJSONData {
+					combined[k] = v
+				}
+				for k, v := range merged.DecryptedSecureJSONData {
+					combined[k] = v
+				}
+				merged.DecryptedSecureJSONData = combined
 			}
 		}
 	}
-	return a.savePersistedAppSettings(ctx, orgID, settings)
+
+	return a.savePersistedAppSettings(ctx, orgID, merged)
+}
+
+func copyStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 func shouldPreferPersistedSettings(settings backend.AppInstanceSettings, persisted *persistedAppSettings) bool {

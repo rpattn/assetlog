@@ -131,3 +131,69 @@ func TestNewAppHandlesStorageInitErrorsGracefully(t *testing.T) {
 		t.Fatalf("expected health message to mention storage failure, got %q", res.Message)
 	}
 }
+
+func TestPersistedSettingsRetainSecretsOnPartialUpdates(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "assets.db")
+	t.Setenv("SQLITE_PATH", dbPath)
+	t.Setenv(envForceLocalStorage, "1")
+
+	orgID := int64(42)
+	baseTime := time.Now().UTC().Add(-time.Hour)
+	ctx := backend.WithPluginContext(context.Background(), backend.PluginContext{OrgID: orgID})
+
+	initialSettings := backend.AppInstanceSettings{
+		JSONData: []byte(`{"apiUrl":"https://initial","bucketName":"initial-bucket","objectPrefix":"team/","maxUploadSizeMb":16}`),
+		DecryptedSecureJSONData: map[string]string{
+			"apiKey":            "initial-api-key",
+			"gcsServiceAccount": `{"client_email":"initial@example.com","private_key":"-----BEGIN PRIVATE KEY-----\nXYZ\n-----END PRIVATE KEY-----\n"}`,
+		},
+		Updated: baseTime,
+	}
+
+	inst, err := NewApp(ctx, initialSettings)
+	if err != nil {
+		t.Fatalf("NewApp returned error: %v", err)
+	}
+	app := inst.(*App)
+	app.Dispose()
+
+	// Simulate updating only non-secret fields from Grafana. Grafana bumps the Updated timestamp
+	// but omits previously configured secrets when they are left untouched in the UI.
+	updatedSettings := backend.AppInstanceSettings{
+		JSONData: []byte(`{"apiUrl":"https://updated","bucketName":"updated-bucket","objectPrefix":"team/",` +
+			`"maxUploadSizeMb":32}`),
+		Updated: baseTime.Add(time.Minute),
+	}
+
+	inst2, err := NewApp(ctx, updatedSettings)
+	if err != nil {
+		t.Fatalf("NewApp after update returned error: %v", err)
+	}
+	app2 := inst2.(*App)
+	defer app2.Dispose()
+
+	// Secrets should be preserved while JSON values reflect the latest update.
+	if app2.config.Storage.Bucket != "updated-bucket" {
+		t.Fatalf("expected bucket to be updated, got %q", app2.config.Storage.Bucket)
+	}
+	if string(app2.config.Storage.ServiceAccountJSON) == "" {
+		t.Fatalf("expected service account JSON to persist across updates")
+	}
+	if app2.config.APIKey != "initial-api-key" {
+		t.Fatalf("expected API key to persist across updates, got %q", app2.config.APIKey)
+	}
+
+	persisted, err := app2.loadPersistedAppSettings(context.Background(), orgID)
+	if err != nil {
+		t.Fatalf("loadPersistedAppSettings returned error: %v", err)
+	}
+	if persisted == nil {
+		t.Fatalf("expected persisted settings to exist")
+	}
+	if persisted.SecureJSONData["gcsServiceAccount"] == "" {
+		t.Fatalf("expected stored service account JSON to remain after partial update")
+	}
+	if !strings.Contains(string(persisted.JSONData), "updated-bucket") {
+		t.Fatalf("expected persisted JSON to contain updated bucket, got %s", persisted.JSONData)
+	}
+}
