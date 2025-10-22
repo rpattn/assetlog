@@ -805,7 +805,7 @@ const getStyles = (theme: GrafanaTheme2) => {
   const border = `1px solid ${theme.colors.border.weak}`;
   const filterButton = css`
     opacity: 0;
-    pointer-events: none;
+    pointer-events: auto; //important to override parent
     transition: opacity 0.15s ease-in-out;
     min-width: 0;
 
@@ -826,7 +826,7 @@ const getStyles = (theme: GrafanaTheme2) => {
 
   const sortButton = css`
     opacity: 0;
-    pointer-events: none;
+    pointer-events: auto; //important to override parent
     transition: opacity 0.15s ease-in-out;
     min-width: 0;
 
