@@ -42,27 +42,27 @@ func NewApp(ctx context.Context, settings backend.AppInstanceSettings) (instance
 	}
 
 	pluginCtx := backend.PluginConfigFromContext(ctx)
-	var (
-		persisted *persistedAppSettings
-		prefer    bool
-	)
 	if pluginCtx.OrgID != 0 {
-		if persisted, err = a.loadPersistedAppSettings(ctx, pluginCtx.OrgID); err != nil {
-			log.Printf("load persisted app settings failed: %v", err)
+		persisted, err := a.loadPersistedAppSettings(ctx, pluginCtx.OrgID)
+		if err != nil {
+			log.Printf("load persisted app settings for org %d failed: %v", pluginCtx.OrgID, err)
 		} else if persisted != nil {
 			persistedCfg, parseErr := parseConfig(backend.AppInstanceSettings{
 				JSONData:                persisted.JSONData,
 				DecryptedSecureJSONData: persisted.SecureJSONData,
 			})
 			if parseErr != nil {
-				log.Printf("parse persisted app settings failed: %v", parseErr)
+				log.Printf("parse persisted app settings for org %d failed: %v", pluginCtx.OrgID, parseErr)
 			} else {
-				prefer = shouldPreferPersistedSettings(settings, persisted)
-				cfg = mergeConfigWithPersisted(cfg, persistedCfg, prefer)
+				cfg = persistedCfg
+				log.Printf("loaded persisted app settings for org %d", pluginCtx.OrgID)
 			}
-		}
-		if err := a.persistAppInstanceSettings(ctx, pluginCtx.OrgID, settings, persisted, prefer); err != nil {
-			log.Printf("persist app settings failed: %v", err)
+		} else {
+			if err := a.savePersistedAppSettings(ctx, pluginCtx.OrgID, settings); err != nil {
+				log.Printf("persist default app settings for org %d failed: %v", pluginCtx.OrgID, err)
+			} else {
+				log.Printf("persisted default app settings for org %d", pluginCtx.OrgID)
+			}
 		}
 	}
 
