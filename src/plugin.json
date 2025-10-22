@@ -55,6 +55,12 @@
       "path": "/plugins/%PLUGIN_ID%",
       "role": "Admin",
       "addToNav": true
+    },
+    {
+      "type": "panel",
+      "name": "Asset Log Table",
+      "id": "rpatt-assetlog-table-panel",
+      "path": "panels/asset-log-table/module"
     }
   ],
   "dependencies": {

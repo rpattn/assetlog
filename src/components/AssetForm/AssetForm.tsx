@@ -55,8 +55,8 @@ export const AssetForm = ({
     return (name: keyof FormState) => `${formId}-${name}`;
   }, [formId]);
 
-  const handleChange = (name: keyof FormState) => (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    const value = event.target.value;
+  const handleChange = (name: keyof FormState) => (event: React.FormEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const value = event.currentTarget.value;
     setForm((prev) => ({ ...prev, [name]: value }));
     if (errors[name]) {
       setErrors((prev) => {
