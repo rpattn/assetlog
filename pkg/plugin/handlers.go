@@ -35,6 +35,7 @@ type assetListMeta struct {
 	PageCount          int                 `json:"pageCount"`
 	TotalCount         int64               `json:"totalCount"`
 	Filters            map[string][]string `json:"filters"`
+	Sort               *AssetListSort      `json:"sort,omitempty"`
 	StorageError       string              `json:"storageError,omitempty"`
 }
 
@@ -68,10 +69,11 @@ func (a *App) handleAssetsCollection(w http.ResponseWriter, r *http.Request) {
 			PageCount:          result.PageCount,
 			TotalCount:         result.TotalCount,
 			Filters:            result.AppliedFilters,
+			Sort:               result.AppliedSort,
 		}
-                if meta.Filters == nil {
-                        meta.Filters = map[string][]string{}
-                }
+		if meta.Filters == nil {
+			meta.Filters = map[string][]string{}
+		}
 		if a.storageInitErr != nil {
 			meta.StorageError = a.storageInitErr.Error()
 		}
@@ -344,10 +346,27 @@ func parseAssetListOptions(r *http.Request) AssetListOptions {
 		parsedFilters = filters
 	}
 
+	sortRaw := strings.TrimSpace(query.Get("sort"))
+	var sortOption *AssetListSort
+	if sortRaw != "" {
+		parts := strings.SplitN(sortRaw, ":", 2)
+		if len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			direction := strings.TrimSpace(parts[1])
+			if key != "" && direction != "" {
+				sortOption = &AssetListSort{
+					Key:       key,
+					Direction: AssetSortDirection(strings.ToLower(direction)),
+				}
+			}
+		}
+	}
+
 	return AssetListOptions{
 		Page:     page,
 		PageSize: pageSize,
 		Filters:  parsedFilters,
+		Sort:     sortOption,
 	}
 }
 
