@@ -88,6 +88,7 @@ export const AssetTable = ({
   const showPagination = Boolean(onPageChange);
 
   const [activeFilter, setActiveFilter] = useState<{ key: FilterKey; button: HTMLButtonElement | null } | null>(null);
+  const [hoveredFilter, setHoveredFilter] = useState<FilterKey | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
 
   const filterOptions = useMemo(
@@ -132,6 +133,12 @@ export const AssetTable = ({
     },
     [closeActiveFilter, filterValues, onFiltersChange]
   );
+
+  useEffect(() => {
+    if (!showFilters) {
+      setHoveredFilter(null);
+    }
+  }, [showFilters]);
 
   useEffect(() => {
     if (!activeFilter) {
@@ -222,8 +229,15 @@ export const AssetTable = ({
       }
       const isActive = Boolean(filterValues[key]?.length);
       const isOpen = activeFilter?.key === key;
+      const isHovered = hoveredFilter === key;
       return (
-        <div className={styles.headerContent}>
+        <div
+          className={styles.headerContent}
+          onMouseEnter={() => setHoveredFilter(key)}
+          onMouseLeave={() => {
+            setHoveredFilter((current) => (current === key ? null : current));
+          }}
+        >
           <span className={styles.headerLabel}>{label}</span>
           <Button
             type="button"
@@ -232,7 +246,7 @@ export const AssetTable = ({
             icon="filter"
             className={cx(
               styles.filterButton,
-              (isActive || isOpen) && styles.filterButtonVisible,
+              (isActive || isOpen || isHovered) && styles.filterButtonVisible,
               isActive && styles.filterButtonActive
             )}
             title={`Filter ${label}`}
@@ -257,7 +271,18 @@ export const AssetTable = ({
         </div>
       );
     },
-    [activeFilter, closeActiveFilter, filterOptions, filterValues, handleFilterApply, handleFilterButtonClick, showFilters, styles]
+    [
+      activeFilter,
+      closeActiveFilter,
+      filterOptions,
+      filterValues,
+      handleFilterApply,
+      handleFilterButtonClick,
+      hoveredFilter,
+      setHoveredFilter,
+      showFilters,
+      styles,
+    ]
   );
 
   const columns = useMemo(
