@@ -37,7 +37,7 @@ func NewApp(ctx context.Context, settings backend.AppInstanceSettings) (instance
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	a := &App{config: cfg}
-	if err := a.initDatabase(); err != nil {
+	if err := a.initDatabase(ctx); err != nil {
 		return nil, fmt.Errorf("initDatabase: %w", err)
 	}
 
