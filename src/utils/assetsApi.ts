@@ -1,11 +1,13 @@
 import { getBackendSrv, isFetchError } from '@grafana/runtime';
 import type {
   AssetFile,
+  AssetFilterKey,
   AssetListFilters,
   AssetListMeta,
   AssetPayload,
   AssetRecord,
 } from '../types/assets';
+import { EMPTY_FILTER_VALUE } from '../types/assets';
 
 const PLUGIN_ID = 'rpatt-assetlog-app';
 const BASE_URL = `/api/plugins/${PLUGIN_ID}/resources/assets`;
@@ -41,9 +43,7 @@ export async function fetchAssets(query?: AssetListQuery): Promise<AssetListResu
   const url = buildListURL(query);
   const response = await backend.get<ListResponse>(url, undefined, undefined, { showErrorAlert: false });
   const meta: AssetListMeta = response?.meta ?? getDefaultMeta();
-  if (!meta.filters) {
-    meta.filters = {};
-  }
+  meta.filters = normalizeFilters(meta.filters);
   return {
     assets: response?.data ?? [],
     meta,
@@ -171,14 +171,21 @@ function buildListURL(query?: AssetListQuery): string {
   }
   if (query.filters) {
     Object.entries(query.filters).forEach(([key, value]) => {
-      if (typeof value !== 'string') {
+      if (Array.isArray(value)) {
+        value.forEach((item) => {
+          const normalized = normalizeFilterValue(item);
+          if (normalized) {
+            params.append(`filter[${key}]`, normalized);
+          }
+        });
         return;
       }
-      const trimmed = value.trim();
-      if (trimmed === '') {
-        return;
+      if (typeof value === 'string') {
+        const normalized = normalizeFilterValue(value);
+        if (normalized) {
+          params.append(`filter[${key}]`, normalized);
+        }
       }
-      params.set(`filter[${key}]`, trimmed);
     });
   }
   const queryString = params.toString();
@@ -199,6 +206,55 @@ function getDefaultMeta(): AssetListMeta {
     totalCount: 0,
     filters: {},
   };
+}
+
+function normalizeFilterValue(value: string): string | null {
+  if (value === EMPTY_FILTER_VALUE) {
+    return value;
+  }
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+function normalizeFilters(filters?: Record<string, string | string[] | undefined>): AssetListFilters {
+  const result: AssetListFilters = {};
+  if (!filters) {
+    return result;
+  }
+  Object.entries(filters).forEach(([key, value]) => {
+    if (!value) {
+      return;
+    }
+    const normalized = Array.isArray(value)
+      ? normalizeFilterArray(value)
+      : normalizeFilterArray([value]);
+    if (normalized.length === 0) {
+      return;
+    }
+    result[key as AssetFilterKey] = normalized;
+  });
+  return result;
+}
+
+function normalizeFilterArray(values: string[]): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const raw of values) {
+    if (raw === EMPTY_FILTER_VALUE) {
+      if (!seen.has(EMPTY_FILTER_VALUE)) {
+        seen.add(EMPTY_FILTER_VALUE);
+        normalized.push(EMPTY_FILTER_VALUE);
+      }
+      continue;
+    }
+    const trimmed = raw.trim();
+    if (trimmed === '' || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+  return normalized;
 }
 
 function tryGetBackendSrv() {

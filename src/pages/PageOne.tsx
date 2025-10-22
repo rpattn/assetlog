@@ -7,7 +7,15 @@ import { AssetForm } from '../components/AssetForm';
 import { AttachmentManager } from '../components/AttachmentManager';
 import { AssetTable } from '../components/AssetTable';
 import { testIds } from '../components/testIds';
-import type { AssetFile, AssetListFilters, AssetListMeta, AssetPayload, AssetRecord } from '../types/assets';
+import type {
+  AssetFile,
+  AssetFilterKey,
+  AssetListFilters,
+  AssetListMeta,
+  AssetPayload,
+  AssetRecord,
+} from '../types/assets';
+import { EMPTY_FILTER_VALUE } from '../types/assets';
 import {
   createAsset,
   deleteAsset,
@@ -48,20 +56,7 @@ function PageOne() {
   const [filters, setFilters] = useState<AssetListFilters>({});
   const [refreshToken, setRefreshToken] = useState(0);
 
-  const filterParams = useMemo<AssetListFilters>(() => {
-    const result: Record<string, string> = {};
-    Object.entries(filters ?? {}).forEach(([key, value]) => {
-      if (typeof value !== 'string') {
-        return;
-      }
-      const trimmed = value.trim();
-      if (trimmed === '') {
-        return;
-      }
-      result[key] = trimmed;
-    });
-    return result as AssetListFilters;
-  }, [filters]);
+  const filterParams = useMemo<AssetListFilters>(() => normalizeFilterState(filters), [filters]);
 
   const filterKey = useMemo(() => JSON.stringify(filterParams), [filterParams]);
 
@@ -83,7 +78,7 @@ function PageOne() {
           if (listMeta?.pageSize && listMeta.pageSize !== pageSize) {
             setPageSize(listMeta.pageSize);
           }
-          const nextFilters = listMeta?.filters ?? {};
+          const nextFilters = normalizeFilterState(listMeta?.filters);
           setFilters((prev) => (shallowEqualFilters(prev, nextFilters) ? prev : nextFilters));
           setLoading(false);
         }
@@ -225,10 +220,8 @@ function PageOne() {
   };
 
   const handleFiltersChange = useCallback((next: AssetListFilters) => {
-    setFilters((prev) => {
-      const normalized = next ?? {};
-      return shallowEqualFilters(prev, normalized) ? prev : normalized;
-    });
+    const normalized = normalizeFilterState(next);
+    setFilters((prev) => (shallowEqualFilters(prev, normalized) ? prev : normalized));
     setPage(1);
   }, []);
 
@@ -385,19 +378,75 @@ function sortAttachments(files: AssetFile[]): AssetFile[] {
 }
 
 function shallowEqualFilters(a?: AssetListFilters, b?: AssetListFilters): boolean {
-  const mapA = a ?? {};
-  const mapB = b ?? {};
-  const keysA = Object.keys(mapA);
-  const keysB = Object.keys(mapB);
+  const mapA = normalizeFilterState(a);
+  const mapB = normalizeFilterState(b);
+  const keysA = Object.keys(mapA).sort();
+  const keysB = Object.keys(mapB).sort();
   if (keysA.length !== keysB.length) {
     return false;
   }
-  for (const key of keysA) {
-    if ((mapA as Record<string, string>)[key] !== (mapB as Record<string, string>)[key]) {
+  for (let i = 0; i < keysA.length; i++) {
+    const key = keysA[i] as AssetFilterKey;
+    if (key !== (keysB[i] as AssetFilterKey)) {
       return false;
+    }
+    const valuesA = mapA[key] ?? [];
+    const valuesB = mapB[key] ?? [];
+    if (valuesA.length !== valuesB.length) {
+      return false;
+    }
+    for (let j = 0; j < valuesA.length; j++) {
+      if (valuesA[j] !== valuesB[j]) {
+        return false;
+      }
     }
   }
   return true;
+}
+
+function normalizeFilterState(filters?: AssetListFilters): AssetListFilters {
+  if (!filters) {
+    return {};
+  }
+  const normalized: AssetListFilters = {};
+  (Object.entries(filters) as [AssetFilterKey, string[]][]).forEach(([key, values]) => {
+    if (!Array.isArray(values) || values.length === 0) {
+      return;
+    }
+    const cleaned = normalizeFilterValues(values);
+    if (cleaned.length === 0) {
+      return;
+    }
+    normalized[key] = cleaned;
+  });
+  return normalized;
+}
+
+function normalizeFilterValues(values: string[]): string[] {
+  const seen = new Set<string>();
+  const cleaned: string[] = [];
+  for (const raw of values) {
+    const normalized = raw === EMPTY_FILTER_VALUE ? EMPTY_FILTER_VALUE : raw.trim();
+    if (normalized === '' || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    cleaned.push(normalized);
+  }
+  return cleaned.sort((a, b) => compareFilterValue(a, b));
+}
+
+function compareFilterValue(a: string, b: string): number {
+  if (a === b) {
+    return 0;
+  }
+  if (a === EMPTY_FILTER_VALUE) {
+    return 1;
+  }
+  if (b === EMPTY_FILTER_VALUE) {
+    return -1;
+  }
+  return a.localeCompare(b, undefined, { sensitivity: 'base' });
 }
 
 const getStyles = (theme: GrafanaTheme2) => {

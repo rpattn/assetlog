@@ -45,9 +45,19 @@ export interface AssetPayload {
   roll: number;
 }
 
-export type AssetListFilters = Partial<
-  Record<'title' | 'entry_date' | 'commissioning_date' | 'station_name' | 'technician' | 'service', string>
->;
+export type AssetFilterKey =
+  | 'title'
+  | 'entry_date'
+  | 'commissioning_date'
+  | 'station_name'
+  | 'technician'
+  | 'service';
+
+export type AssetFilterValue = string[];
+
+export type AssetListFilters = Partial<Record<AssetFilterKey, AssetFilterValue>>;
+
+export const EMPTY_FILTER_VALUE = '__EMPTY__';
 
 export interface AssetListMeta {
   storageConfigured: boolean;

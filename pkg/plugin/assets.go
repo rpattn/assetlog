@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -31,6 +32,8 @@ const (
 	defaultAssetsPageSize = 25
 	maxAssetsPageSize     = 200
 )
+
+const emptyFilterValue = "__EMPTY__"
 
 var assetFilterColumns = map[string]string{
 	"title":              "title",
@@ -138,7 +141,7 @@ func (p AssetPayload) validate() error {
 type AssetListOptions struct {
 	Page     int
 	PageSize int
-	Filters  map[string]string
+	Filters  map[string][]string
 }
 
 type AssetListResult struct {
@@ -147,7 +150,7 @@ type AssetListResult struct {
 	Page           int
 	PageSize       int
 	PageCount      int
-	AppliedFilters map[string]string
+	AppliedFilters map[string][]string
 }
 
 func (opts *AssetListOptions) normalize() {
@@ -161,7 +164,7 @@ func (opts *AssetListOptions) normalize() {
 		opts.PageSize = maxAssetsPageSize
 	}
 	if opts.Filters == nil {
-		opts.Filters = map[string]string{}
+		opts.Filters = map[string][]string{}
 	}
 }
 
@@ -170,20 +173,60 @@ func (a *App) listAssets(ctx context.Context, orgID int64, opts AssetListOptions
 
 	whereParts := []string{"org_id = ?"}
 	args := []interface{}{orgID}
-	appliedFilters := make(map[string]string)
+	appliedFilters := make(map[string][]string)
 
-	for key, value := range opts.Filters {
+	for key, values := range opts.Filters {
 		column, ok := assetFilterColumns[key]
 		if !ok {
 			continue
 		}
-		trimmed := strings.TrimSpace(value)
-		if trimmed == "" {
+		includeEmpty := false
+		cleaned := make([]string, 0, len(values))
+		for _, raw := range values {
+			trimmed := strings.TrimSpace(raw)
+			if trimmed == "" {
+				continue
+			}
+			if trimmed == emptyFilterValue {
+				includeEmpty = true
+				continue
+			}
+			cleaned = append(cleaned, trimmed)
+		}
+		if len(cleaned) == 0 && !includeEmpty {
 			continue
 		}
-		whereParts = append(whereParts, fmt.Sprintf("%s LIKE ?", column))
-		args = append(args, "%"+trimmed+"%")
-		appliedFilters[key] = trimmed
+		sort.Strings(cleaned)
+		conditions := make([]string, 0, 2)
+		switch len(cleaned) {
+		case 0:
+			// no explicit values
+		case 1:
+			conditions = append(conditions, fmt.Sprintf("%s = ?", column))
+			args = append(args, cleaned[0])
+		default:
+			placeholders := strings.TrimRight(strings.Repeat("?,", len(cleaned)), ",")
+			conditions = append(conditions, fmt.Sprintf("%s IN (%s)", column, placeholders))
+			for _, value := range cleaned {
+				args = append(args, value)
+			}
+		}
+		if includeEmpty {
+			conditions = append(conditions, fmt.Sprintf("(%s IS NULL OR %s = '')", column, column))
+		}
+		if len(conditions) == 0 {
+			continue
+		}
+		if len(conditions) == 1 {
+			whereParts = append(whereParts, conditions[0])
+		} else {
+			whereParts = append(whereParts, fmt.Sprintf("(%s)", strings.Join(conditions, " OR ")))
+		}
+		applied := append([]string{}, cleaned...)
+		if includeEmpty {
+			applied = append(applied, emptyFilterValue)
+		}
+		appliedFilters[key] = applied
 	}
 
 	whereClause := strings.Join(whereParts, " AND ")

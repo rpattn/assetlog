@@ -27,15 +27,15 @@ func (e httpError) Error() string {
 }
 
 type assetListMeta struct {
-	StorageConfigured  bool              `json:"storageConfigured"`
-	MaxUploadSizeBytes int64             `json:"maxUploadSizeBytes"`
-	MaxUploadSizeMb    int64             `json:"maxUploadSizeMb"`
-	Page               int               `json:"page"`
-	PageSize           int               `json:"pageSize"`
-	PageCount          int               `json:"pageCount"`
-	TotalCount         int64             `json:"totalCount"`
-	Filters            map[string]string `json:"filters"`
-	StorageError       string            `json:"storageError,omitempty"`
+	StorageConfigured  bool                `json:"storageConfigured"`
+	MaxUploadSizeBytes int64               `json:"maxUploadSizeBytes"`
+	MaxUploadSizeMb    int64               `json:"maxUploadSizeMb"`
+	Page               int                 `json:"page"`
+	PageSize           int                 `json:"pageSize"`
+	PageCount          int                 `json:"pageCount"`
+	TotalCount         int64               `json:"totalCount"`
+	Filters            map[string][]string `json:"filters"`
+	StorageError       string              `json:"storageError,omitempty"`
 }
 
 type assetListResponse struct {
@@ -69,9 +69,9 @@ func (a *App) handleAssetsCollection(w http.ResponseWriter, r *http.Request) {
 			TotalCount:         result.TotalCount,
 			Filters:            result.AppliedFilters,
 		}
-		if meta.Filters == nil {
-			meta.Filters = map[string]string{}
-		}
+                if meta.Filters == nil {
+                        meta.Filters = map[string][]string{}
+                }
 		if a.storageInitErr != nil {
 			meta.StorageError = a.storageInitErr.Error()
 		}
@@ -308,7 +308,7 @@ func parseAssetListOptions(r *http.Request) AssetListOptions {
 	page, _ := strconv.Atoi(strings.TrimSpace(query.Get("page")))
 	pageSize, _ := strconv.Atoi(strings.TrimSpace(query.Get("pageSize")))
 
-	filters := make(map[string]string)
+	filters := make(map[string][]string)
 	for key, values := range query {
 		if len(values) == 0 {
 			continue
@@ -320,10 +320,26 @@ func parseAssetListOptions(r *http.Request) AssetListOptions {
 		if name == "" {
 			continue
 		}
-		filters[name] = values[len(values)-1]
+		seen := make(map[string]struct{})
+		normalized := make([]string, 0, len(values))
+		for _, raw := range values {
+			trimmed := strings.TrimSpace(raw)
+			if trimmed == "" {
+				continue
+			}
+			if _, ok := seen[trimmed]; ok {
+				continue
+			}
+			seen[trimmed] = struct{}{}
+			normalized = append(normalized, trimmed)
+		}
+		if len(normalized) == 0 {
+			continue
+		}
+		filters[name] = normalized
 	}
 
-	var parsedFilters map[string]string
+	var parsedFilters map[string][]string
 	if len(filters) > 0 {
 		parsedFilters = filters
 	}
