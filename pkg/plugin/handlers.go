@@ -1,16 +1,21 @@
 package plugin
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const maxAssetPayloadSize = 1 << 20
+const attachmentFormField = "file"
 
 type httpError struct {
 	status  int
@@ -36,7 +41,12 @@ func (a *App) handleAssetsCollection(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]interface{}{"data": assets})
+		meta := map[string]interface{}{
+			"storageConfigured":  a.storageConfigured(),
+			"maxUploadSizeBytes": a.config.Storage.MaxUploadSizeBytes,
+			"maxUploadSizeMb":    a.config.Storage.MaxUploadSizeMB,
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"data": assets, "meta": meta})
 	case http.MethodPost:
 		payload, err := decodeAssetPayload(r)
 		if err != nil {
@@ -112,11 +122,118 @@ func (a *App) handleAssetResource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(segments) >= 2 && segments[1] == "files" {
-		http.Error(w, "not implemented", http.StatusNotImplemented)
+		switch {
+		case r.Method == http.MethodPost && len(segments) == 2:
+			a.handleAssetFileUpload(w, r, orgID, assetID)
+		case r.Method == http.MethodDelete && len(segments) == 3:
+			fileID, err := strconv.ParseInt(segments[2], 10, 64)
+			if err != nil {
+				http.Error(w, "invalid file id", http.StatusBadRequest)
+				return
+			}
+			a.handleAssetFileDelete(w, r, orgID, assetID, fileID)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 		return
 	}
 
 	http.NotFound(w, r)
+}
+
+func (a *App) handleAssetFileUpload(w http.ResponseWriter, r *http.Request, orgID, assetID int64) {
+	if !a.storageConfigured() {
+		http.Error(w, "attachments not configured", http.StatusBadRequest)
+		return
+	}
+	if err := a.ensureAssetExists(r.Context(), orgID, assetID); err != nil {
+		writeHTTPError(w, err)
+		return
+	}
+
+	reader, err := r.MultipartReader()
+	if err != nil {
+		http.Error(w, "invalid multipart form", http.StatusBadRequest)
+		return
+	}
+
+	maxSize := a.config.Storage.MaxUploadSizeBytes
+	if maxSize <= 0 {
+		maxSize = defaultMaxUploadSizeMB * bytesInMegabyte
+	}
+
+	var part *multipart.Part
+	for {
+		p, err := reader.NextPart()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			http.Error(w, "failed to read upload", http.StatusBadRequest)
+			return
+		}
+		if p.FormName() == attachmentFormField {
+			part = p
+			break
+		}
+		p.Close()
+	}
+
+	if part == nil {
+		http.Error(w, "missing file upload", http.StatusBadRequest)
+		return
+	}
+	defer part.Close()
+
+	data, err := io.ReadAll(io.LimitReader(part, maxSize+1))
+	if err != nil {
+		http.Error(w, "failed to read file", http.StatusBadRequest)
+		return
+	}
+	if int64(len(data)) > maxSize {
+		http.Error(w, fmt.Sprintf("file exceeds maximum size of %d bytes", maxSize), http.StatusBadRequest)
+		return
+	}
+	if len(data) == 0 {
+		http.Error(w, "file is empty", http.StatusBadRequest)
+		return
+	}
+
+	filename := strings.TrimSpace(part.FileName())
+	if filename == "" {
+		filename = fmt.Sprintf("attachment-%d", time.Now().Unix())
+	}
+	contentType := part.Header.Get("Content-Type")
+	if strings.TrimSpace(contentType) == "" {
+		contentType = http.DetectContentType(data)
+	}
+
+	storageKey := a.generateStorageKey(orgID, assetID, filename)
+	if err := a.storage.Upload(r.Context(), storageKey, bytes.NewReader(data), int64(len(data)), contentType); err != nil {
+		log.Printf("upload attachment failed: %v", err)
+		http.Error(w, "failed to upload attachment", http.StatusInternalServerError)
+		return
+	}
+
+	file, err := a.insertAssetFile(r.Context(), orgID, assetID, filename, contentType, storageKey)
+	if err != nil {
+		log.Printf("insert asset file failed: %v", err)
+		if delErr := a.storage.Delete(r.Context(), storageKey); delErr != nil {
+			log.Printf("cleanup storage failed: %v", delErr)
+		}
+		writeHTTPError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]interface{}{"data": file})
+}
+
+func (a *App) handleAssetFileDelete(w http.ResponseWriter, r *http.Request, orgID, assetID, fileID int64) {
+	if err := a.deleteAssetFile(r.Context(), orgID, assetID, fileID); err != nil {
+		writeHTTPError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func decodeAssetPayload(r *http.Request) (AssetPayload, error) {
@@ -179,6 +296,8 @@ func writeHTTPError(w http.ResponseWriter, err error) {
 		http.Error(w, valErr.Error(), http.StatusBadRequest)
 	case errors.Is(err, errAssetNotFound):
 		http.Error(w, "not found", http.StatusNotFound)
+	case errors.Is(err, errAssetFileNotFound):
+		http.Error(w, "file not found", http.StatusNotFound)
 	default:
 		log.Printf("handler error: %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)

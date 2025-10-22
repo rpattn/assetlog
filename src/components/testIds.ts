@@ -14,6 +14,11 @@ export const testIds = {
     addAsset: 'data-testid pg-one-add-asset',
     table: 'data-testid pg-one-table',
     emptyState: 'data-testid pg-one-empty',
+    attachments: {
+      container: 'data-testid pg-one-attachments',
+      uploadInput: 'data-testid pg-one-attachments-upload',
+      empty: 'data-testid pg-one-attachments-empty',
+    },
   },
   pageTwo: {
     container: 'data-testid pg-two-container',

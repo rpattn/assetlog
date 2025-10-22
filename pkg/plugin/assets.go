@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type validationError struct {
@@ -19,7 +22,10 @@ func (e validationError) Error() string {
 	return e.message
 }
 
-var errAssetNotFound = errors.New("asset not found")
+var (
+	errAssetNotFound     = errors.New("asset not found")
+	errAssetFileNotFound = errors.New("asset file not found")
+)
 
 type AssetRecord struct {
 	ID                int64       `json:"id"`
@@ -314,6 +320,20 @@ func (a *App) updateAsset(ctx context.Context, orgID, assetID int64, payload Ass
 }
 
 func (a *App) deleteAsset(ctx context.Context, orgID, assetID int64) error {
+	if a.storageConfigured() {
+		attachments, err := a.loadAssetFiles(ctx, orgID, []int64{assetID})
+		if err != nil {
+			return err
+		}
+		if files, ok := attachments[assetID]; ok {
+			for _, file := range files {
+				if err := a.storage.Delete(ctx, file.storageKey); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	res, err := a.db.ExecContext(ctx, `DELETE FROM assets WHERE org_id = ? AND id = ?`, orgID, assetID)
 	if err != nil {
 		return err
@@ -326,6 +346,98 @@ func (a *App) deleteAsset(ctx context.Context, orgID, assetID int64) error {
 		return errAssetNotFound
 	}
 	return nil
+}
+
+func (a *App) insertAssetFile(ctx context.Context, orgID, assetID int64, fileName, contentType, storageKey string) (AssetFile, error) {
+	var contentValue interface{}
+	if strings.TrimSpace(contentType) != "" {
+		contentValue = contentType
+	}
+	res, err := a.db.ExecContext(ctx, `INSERT INTO asset_files (asset_id, org_id, file_name, content_type, object_name) VALUES (?, ?, ?, ?, ?)`,
+		assetID,
+		orgID,
+		fileName,
+		contentValue,
+		storageKey,
+	)
+	if err != nil {
+		return AssetFile{}, err
+	}
+	fileID, err := res.LastInsertId()
+	if err != nil {
+		return AssetFile{}, err
+	}
+	return a.getAssetFile(ctx, orgID, assetID, fileID)
+}
+
+func (a *App) getAssetFile(ctx context.Context, orgID, assetID, fileID int64) (AssetFile, error) {
+	var file AssetFile
+	var contentType sqlNullString
+	err := a.db.QueryRowContext(ctx, `SELECT id, asset_id, file_name, content_type, object_name, created_at, updated_at FROM asset_files WHERE org_id = ? AND asset_id = ? AND id = ?`,
+		orgID,
+		assetID,
+		fileID,
+	).Scan(&file.ID, &file.AssetID, &file.FileName, &contentType, &file.storageKey, &file.CreatedAt, &file.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return AssetFile{}, errAssetFileNotFound
+	}
+	if err != nil {
+		return AssetFile{}, err
+	}
+	if contentType.Valid {
+		file.ContentType = contentType.String
+	}
+	a.assignFileURL(ctx, &file)
+	return file, nil
+}
+
+func (a *App) deleteAssetFile(ctx context.Context, orgID, assetID, fileID int64) error {
+	file, err := a.getAssetFile(ctx, orgID, assetID, fileID)
+	if err != nil {
+		return err
+	}
+	if a.storageConfigured() && file.storageKey != "" {
+		if err := a.storage.Delete(ctx, file.storageKey); err != nil {
+			return err
+		}
+	}
+	res, err := a.db.ExecContext(ctx, `DELETE FROM asset_files WHERE org_id = ? AND asset_id = ? AND id = ?`, orgID, assetID, fileID)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return errAssetFileNotFound
+	}
+	return nil
+}
+
+func (a *App) generateStorageKey(orgID, assetID int64, fileName string) string {
+	sanitized := sanitizeObjectName(fileName)
+	if sanitized == "" {
+		sanitized = fmt.Sprintf("file-%s", uuid.NewString())
+	}
+	timestamp := time.Now().UTC().Format("20060102T150405Z")
+	unique := uuid.NewString()
+	parts := []string{
+		fmt.Sprintf("org-%d", orgID),
+		fmt.Sprintf("asset-%d", assetID),
+		fmt.Sprintf("%s-%s", timestamp, unique),
+		sanitized,
+	}
+	return strings.Join(parts, "/")
+}
+
+func (a *App) ensureAssetExists(ctx context.Context, orgID, assetID int64) error {
+	var id int64
+	err := a.db.QueryRowContext(ctx, `SELECT id FROM assets WHERE org_id = ? AND id = ?`, orgID, assetID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return errAssetNotFound
+	}
+	return err
 }
 
 func (a *App) loadAssetFiles(ctx context.Context, orgID int64, assetIDs []int64) (map[int64][]AssetFile, error) {
@@ -358,6 +470,7 @@ func (a *App) loadAssetFiles(ctx context.Context, orgID int64, assetIDs []int64)
 		if contentType.Valid {
 			file.ContentType = contentType.String
 		}
+		a.assignFileURL(ctx, &file)
 		result[file.AssetID] = append(result[file.AssetID], file)
 	}
 	if err := rows.Err(); err != nil {
@@ -378,4 +491,19 @@ func collectFileNames(files []AssetFile) []string {
 		}
 	}
 	return names
+}
+
+func (a *App) assignFileURL(ctx context.Context, file *AssetFile) {
+	if file == nil || file.storageKey == "" {
+		return
+	}
+	if !a.storageConfigured() {
+		return
+	}
+	url, err := a.storage.SignedURL(ctx, file.storageKey, signedURLTTL)
+	if err != nil {
+		log.Printf("signed URL for %s failed: %v", file.storageKey, err)
+		return
+	}
+	file.URL = url
 }

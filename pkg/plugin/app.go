@@ -13,7 +13,8 @@ import (
 
 type App struct {
 	backend.CallResourceHandler
-	db *sql.DB
+	db      *sql.DB
+	storage StorageClient
 	// config stores the current plugin configuration for reuse by handlers.
 	config Config
 }
@@ -27,12 +28,19 @@ func (h *withContextHandler) CallResource(ctx context.Context, req *backend.Call
 	return h.inner.CallResource(ctx, req, sender)
 }
 
-func NewApp(_ context.Context, settings backend.AppInstanceSettings) (instancemgmt.Instance, error) {
+func NewApp(ctx context.Context, settings backend.AppInstanceSettings) (instancemgmt.Instance, error) {
 	cfg, err := parseConfig(settings)
 	if err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	a := &App{config: cfg}
+	if cfg.Storage.IsFullyConfigured() {
+		storageClient, err := newStorageClient(ctx, cfg.Storage)
+		if err != nil {
+			return nil, fmt.Errorf("init storage: %w", err)
+		}
+		a.storage = storageClient
+	}
 	if err := a.initDatabase(); err != nil {
 		return nil, fmt.Errorf("initDatabase: %w", err)
 	}
@@ -47,6 +55,14 @@ func (a *App) Dispose() {
 		_ = a.db.Close()
 		a.db = nil
 	}
+	if a.storage != nil {
+		_ = a.storage.Close()
+		a.storage = nil
+	}
+}
+
+func (a *App) storageConfigured() bool {
+	return a.storage != nil && a.config.Storage.IsFullyConfigured()
 }
 
 func (a *App) CheckHealth(_ context.Context, _ *backend.CheckHealthRequest) (*backend.CheckHealthResult, error) {

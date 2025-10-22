@@ -82,20 +82,30 @@ func TestCallResource(t *testing.T) {
 			expStatus:     http.StatusOK,
 			verify: func(t *testing.T, resp *backend.CallResourceResponse) {
 				t.Helper()
-				var payload struct {
-					Data []AssetRecord `json:"data"`
-				}
-				if err := json.Unmarshal(resp.Body, &payload); err != nil {
-					t.Fatalf("decode response: %v", err)
-				}
-				if len(payload.Data) == 0 {
-					t.Fatalf("expected seeded assets, got none")
-				}
-				if payload.Data[0].CreatedAt == "" {
-					t.Fatalf("expected created_at to be populated")
-				}
-			},
-		},
+                                var payload struct {
+                                        Data []AssetRecord           `json:"data"`
+                                        Meta map[string]interface{} `json:"meta"`
+                                }
+                                if err := json.Unmarshal(resp.Body, &payload); err != nil {
+                                        t.Fatalf("decode response: %v", err)
+                                }
+                                if len(payload.Data) == 0 {
+                                        t.Fatalf("expected seeded assets, got none")
+                                }
+                                if payload.Data[0].CreatedAt == "" {
+                                        t.Fatalf("expected created_at to be populated")
+                                }
+                                if payload.Meta == nil {
+                                        t.Fatalf("expected meta to be present")
+                                }
+                                if _, ok := payload.Meta["storageConfigured"]; !ok {
+                                        t.Fatalf("expected storageConfigured in meta")
+                                }
+                                if _, ok := payload.Meta["maxUploadSizeBytes"]; !ok {
+                                        t.Fatalf("expected maxUploadSizeBytes in meta")
+                                }
+                        },
+                },
 		{
 			name:      "get non existing handler 404",
 			method:    http.MethodGet,

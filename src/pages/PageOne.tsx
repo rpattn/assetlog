@@ -4,9 +4,18 @@ import { GrafanaTheme2 } from '@grafana/data';
 import { useStyles2, Button, Alert, AlertVariant, Modal, ConfirmModal, Spinner } from '@grafana/ui';
 import { PluginPage } from '@grafana/runtime';
 import { AssetForm } from '../components/AssetForm';
+import { AttachmentManager } from '../components/AttachmentManager';
 import { testIds } from '../components/testIds';
-import type { AssetPayload, AssetRecord } from '../types/assets';
-import { createAsset, deleteAsset, fetchAssets, toErrorMessage, updateAsset } from '../utils/assetsApi';
+import type { AssetFile, AssetPayload, AssetRecord } from '../types/assets';
+import {
+  createAsset,
+  deleteAsset,
+  deleteAttachment,
+  fetchAssets,
+  toErrorMessage,
+  updateAsset,
+  uploadAttachment,
+} from '../utils/assetsApi';
 
 type ModalState = {
   mode: 'create' | 'edit';
@@ -30,6 +39,8 @@ function PageOne() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [status, setStatus] = useState<StatusMessage | null>(null);
+  const [storageConfigured, setStorageConfigured] = useState(false);
+  const [maxUploadSize, setMaxUploadSize] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -37,9 +48,11 @@ function PageOne() {
     setError(null);
 
     fetchAssets()
-      .then((records) => {
+      .then(({ assets: records, meta }) => {
         if (!cancelled) {
           setAssets(sortAssets(records));
+          setStorageConfigured(Boolean(meta?.storageConfigured));
+          setMaxUploadSize(meta?.maxUploadSizeBytes ?? 0);
           setLoading(false);
         }
       })
@@ -123,6 +136,54 @@ function PageOne() {
     } finally {
       setDeleteLoading(false);
     }
+  };
+
+  const handleUploadAttachment = async (assetId: number, file: File) => {
+    const uploaded = await uploadAttachment(assetId, file);
+    const update = (records: AssetRecord[]) =>
+      records.map((item) => {
+        if (item.id !== assetId) {
+          return item;
+        }
+        const attachments = sortAttachments([...item.attachments, uploaded]);
+        return withAttachments(item, attachments);
+      });
+    setAssets((prev) => update(prev));
+    setModalState((prev) => {
+      if (!prev || !prev.asset || prev.asset.id !== assetId) {
+        return prev;
+      }
+      const attachments = sortAttachments([...prev.asset.attachments, uploaded]);
+      return { ...prev, asset: withAttachments(prev.asset, attachments) };
+    });
+    setStatus({ severity: 'success', message: `Uploaded attachment "${uploaded.file_name}".` });
+    return uploaded;
+  };
+
+  const handleDeleteAttachment = async (assetId: number, fileId: number) => {
+    const currentAsset = assets.find((item) => item.id === assetId);
+    const fileName = currentAsset?.attachments.find((file) => file.id === fileId)?.file_name;
+    await deleteAttachment(assetId, fileId);
+    const update = (records: AssetRecord[]) =>
+      records.map((item) => {
+        if (item.id !== assetId) {
+          return item;
+        }
+        const attachments = item.attachments.filter((file) => file.id !== fileId);
+        return withAttachments(item, attachments);
+      });
+    setAssets((prev) => update(prev));
+    setModalState((prev) => {
+      if (!prev || !prev.asset || prev.asset.id !== assetId) {
+        return prev;
+      }
+      const attachments = prev.asset.attachments.filter((file) => file.id !== fileId);
+      return { ...prev, asset: withAttachments(prev.asset, attachments) };
+    });
+    setStatus({
+      severity: 'success',
+      message: fileName ? `Deleted attachment "${fileName}".` : 'Deleted attachment.',
+    });
   };
 
   return (
@@ -242,15 +303,26 @@ function PageOne() {
           onDismiss={closeModal}
           className={styles.modal}
         >
-          <AssetForm
-            asset={modalState.asset}
-            onSubmit={handleSubmit}
-            onCancel={closeModal}
-            onClearError={() => setFormError(null)}
-            submitLabel={modalState.mode === 'edit' ? 'Save changes' : 'Create asset'}
-            isSubmitting={isSubmitting}
-            errorMessage={formError}
-          />
+          <div className={styles.modalContent}>
+            <AssetForm
+              asset={modalState.asset}
+              onSubmit={handleSubmit}
+              onCancel={closeModal}
+              onClearError={() => setFormError(null)}
+              submitLabel={modalState.mode === 'edit' ? 'Save changes' : 'Create asset'}
+              isSubmitting={isSubmitting}
+              errorMessage={formError}
+            />
+            {modalState.mode === 'edit' && modalState.asset && (
+              <AttachmentManager
+                asset={modalState.asset}
+                onUpload={(file) => handleUploadAttachment(modalState.asset!.id, file)}
+                onDelete={(fileId) => handleDeleteAttachment(modalState.asset!.id, fileId)}
+                storageConfigured={storageConfigured}
+                maxUploadSizeBytes={maxUploadSize}
+              />
+            )}
+          </div>
         </Modal>
       )}
 
@@ -292,6 +364,18 @@ function sortAssets(records: AssetRecord[]): AssetRecord[] {
     }
     return b.id - a.id;
   });
+}
+
+function withAttachments(asset: AssetRecord, attachments: AssetFile[]): AssetRecord {
+  return {
+    ...asset,
+    attachments,
+    image_urls: attachments.map((file) => file.file_name),
+  };
+}
+
+function sortAttachments(files: AssetFile[]): AssetFile[] {
+  return [...files].sort((a, b) => a.id - b.id);
 }
 
 const getStyles = (theme: GrafanaTheme2) => {
@@ -363,6 +447,11 @@ const getStyles = (theme: GrafanaTheme2) => {
     `,
     modal: css`
       width: min(760px, 90vw);
+    `,
+    modalContent: css`
+      display: flex;
+      flex-direction: column;
+      gap: ${theme.spacing(2)};
     `,
     confirmBody: css`
       display: flex;
