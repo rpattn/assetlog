@@ -59,6 +59,23 @@ export type AssetListFilters = Partial<Record<AssetFilterKey, AssetFilterValue>>
 
 export const EMPTY_FILTER_VALUE = '__EMPTY__';
 
+export type AssetSortKey =
+  | 'title'
+  | 'entry_date'
+  | 'commissioning_date'
+  | 'station_name'
+  | 'technician'
+  | 'service'
+  | 'start_date'
+  | 'end_date';
+
+export type AssetSortDirection = 'asc' | 'desc';
+
+export interface AssetListSort {
+  key: AssetSortKey;
+  direction: AssetSortDirection;
+}
+
 export interface AssetListMeta {
   storageConfigured: boolean;
   maxUploadSizeBytes: number;
@@ -69,4 +86,5 @@ export interface AssetListMeta {
   totalCount: number;
   filters: AssetListFilters;
   storageError?: string;
+  sort?: AssetListSort | null;
 }

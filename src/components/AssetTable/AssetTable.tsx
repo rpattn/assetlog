@@ -4,7 +4,14 @@ import { GrafanaTheme2, SelectableValue } from '@grafana/data';
 import { useStyles2, Button, Input, Pagination, Select } from '@grafana/ui';
 import { createColumnHelper, flexRender, getCoreRowModel, useReactTable } from '@tanstack/react-table';
 
-import type { AssetFile, AssetFilterKey, AssetListFilters, AssetRecord } from '../../types/assets';
+import type {
+  AssetFile,
+  AssetFilterKey,
+  AssetListFilters,
+  AssetListSort,
+  AssetRecord,
+  AssetSortKey,
+} from '../../types/assets';
 import { EMPTY_FILTER_VALUE } from '../../types/assets';
 
 type AssetActionHandler = (asset: AssetRecord) => void;
@@ -54,6 +61,8 @@ export interface AssetTableProps {
   totalCount?: number;
   filters?: AssetListFilters;
   onFiltersChange?: (filters: AssetListFilters) => void;
+  sort?: AssetListSort | null;
+  onSortChange?: (sort: AssetListSort | null) => void;
   onPageChange?: (page: number) => void;
   onPageSizeChange?: (pageSize: number) => void;
   pageSizeOptions?: number[];
@@ -71,6 +80,8 @@ export const AssetTable = ({
   totalCount,
   filters,
   onFiltersChange,
+  sort,
+  onSortChange,
   onPageChange,
   onPageSizeChange,
   pageSizeOptions,
@@ -86,6 +97,7 @@ export const AssetTable = ({
   const showFilters = Boolean(onFiltersChange);
   const showPageSizeSelect = Boolean(onPageSizeChange);
   const showPagination = Boolean(onPageChange);
+  const allowSorting = Boolean(onSortChange);
 
   const [activeFilter, setActiveFilter] = useState<{ key: FilterKey; button: HTMLButtonElement | null } | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
@@ -211,56 +223,117 @@ export const AssetTable = ({
     rangeEnd = Math.min(totalRecords, safePage * safePageSize);
   }
 
+  const handleSortToggle = useCallback(
+    (key: AssetSortKey) => {
+      if (!onSortChange) {
+        return;
+      }
+      const currentDirection = sort?.key === key ? sort.direction : undefined;
+      let next: AssetListSort | null;
+      switch (currentDirection) {
+        case 'desc':
+          next = { key, direction: 'asc' };
+          break;
+        case 'asc':
+          next = null;
+          break;
+        default:
+          next = { key, direction: 'desc' };
+          break;
+      }
+      onSortChange(next);
+    },
+    [onSortChange, sort]
+  );
+
   const renderHeader = useCallback(
-    (label: string, key?: FilterKey) => {
-      if (!key || !showFilters) {
+    (label: string, key?: FilterKey, sortKey?: AssetSortKey) => {
+      const hasFilter = Boolean(key && showFilters);
+      const isSortable = Boolean(sortKey && allowSorting);
+      const currentSort = sortKey && sort?.key === sortKey ? sort.direction : undefined;
+      const hasActions = hasFilter || isSortable;
+      if (!hasActions) {
         return (
           <div className={styles.headerContent}>
             <span className={styles.headerLabel}>{label}</span>
           </div>
         );
       }
-      const isActive = Boolean(filterValues[key]?.length);
-      const isOpen = activeFilter?.key === key;
+      const isActive = Boolean(key && filterValues[key]?.length);
+      const isOpen = key ? activeFilter?.key === key : false;
+      const sortTitle = !isSortable
+        ? undefined
+        : currentSort === 'desc'
+        ? `Switch ${label} sort to ascending`
+        : currentSort === 'asc'
+        ? `Clear sort for ${label}`
+        : `Sort ${label} descending`;
       return (
         <div className={styles.headerContent}>
           <span className={styles.headerLabel}>{label}</span>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            icon="filter"
-            className={cx(styles.filterButton, isActive && styles.filterButtonActive)}
-            title={`Filter ${label}`}
-            aria-pressed={isOpen || isActive}
-            aria-haspopup="dialog"
-            onClick={(event) => handleFilterButtonClick(key, event.currentTarget)}
-          />
-          {isOpen && (
-            <FilterMenu
-              key={key}
-              ref={(element) => {
-                popoverRef.current = element;
-              }}
-              label={label}
-              options={filterOptions[key] ?? []}
-              selectedValues={filterValues[key]}
-              onApply={(values) => handleFilterApply(key, values)}
-              onClose={closeActiveFilter}
-              styles={styles}
-            />
-          )}
+          <div className={styles.headerActions}>
+            {isSortable && sortKey && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                icon={
+                  currentSort === 'asc'
+                    ? 'sort-amount-up'
+                    : currentSort === 'desc'
+                    ? 'sort-amount-down'
+                    : 'arrows-v'
+                }
+                className={cx(styles.sortButton, currentSort && styles.sortButtonActive)}
+                title={sortTitle}
+                aria-pressed={Boolean(currentSort)}
+                onClick={() => handleSortToggle(sortKey)}
+              />
+            )}
+            {hasFilter && key && (
+              <>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  icon="filter"
+                  className={cx(styles.filterButton, isActive && styles.filterButtonActive)}
+                  title={`Filter ${label}`}
+                  aria-pressed={isOpen || isActive}
+                  aria-haspopup="dialog"
+                  onClick={(event) => handleFilterButtonClick(key, event.currentTarget)}
+                />
+                {isOpen && (
+                  <FilterMenu
+                    key={key}
+                    ref={(element) => {
+                      popoverRef.current = element;
+                    }}
+                    label={label}
+                    options={filterOptions[key] ?? []}
+                    selectedValues={filterValues[key]}
+                    onApply={(values) => handleFilterApply(key, values)}
+                    onClose={closeActiveFilter}
+                    styles={styles}
+                  />
+                )}
+              </>
+            )}
+          </div>
         </div>
       );
     },
     [
       activeFilter,
+      allowSorting,
       closeActiveFilter,
       filterOptions,
       filterValues,
       handleFilterApply,
       handleFilterButtonClick,
+      handleSortToggle,
       showFilters,
+      sort,
       styles,
     ]
   );
@@ -269,28 +342,28 @@ export const AssetTable = ({
     () =>
       [
         columnHelper.accessor('title', {
-          header: () => renderHeader('Title', 'title'),
+          header: () => renderHeader('Title', 'title', 'title'),
           cell: (info) => info.getValue(),
         }),
         columnHelper.accessor('entry_date', {
-          header: () => renderHeader('Entry Date', 'entry_date'),
+          header: () => renderHeader('Entry Date', 'entry_date', 'entry_date'),
           cell: (info) => info.getValue(),
         }),
         columnHelper.accessor('commissioning_date', {
-          header: () => renderHeader('Commissioning', 'commissioning_date'),
+          header: () => renderHeader('Commissioning', 'commissioning_date', 'commissioning_date'),
           cell: (info) => info.getValue(),
         }),
         columnHelper.accessor('station_name', {
-          header: () => renderHeader('Station', 'station_name'),
+          header: () => renderHeader('Station', 'station_name', 'station_name'),
           cell: (info) => info.getValue(),
         }),
         columnHelper.accessor('technician', {
-          header: () => renderHeader('Technician', 'technician'),
+          header: () => renderHeader('Technician', 'technician', 'technician'),
           cell: (info) => info.getValue(),
         }),
         columnHelper.display({
           id: 'startEnd',
-          header: () => renderHeader('Start / End'),
+          header: () => renderHeader('Start / End', undefined, 'start_date'),
           cell: (info) => {
             const asset = info.row.original;
             return (
@@ -299,7 +372,7 @@ export const AssetTable = ({
           },
         }),
         columnHelper.accessor('service', {
-          header: () => renderHeader('Service', 'service'),
+          header: () => renderHeader('Service', 'service', 'service'),
           cell: (info) => info.getValue() ?? '—',
         }),
         columnHelper.accessor('staff', {
@@ -732,7 +805,7 @@ const getStyles = (theme: GrafanaTheme2) => {
   const border = `1px solid ${theme.colors.border.weak}`;
   const filterButton = css`
     opacity: 0;
-    pointer-events: auto;
+    pointer-events: none;
     transition: opacity 0.15s ease-in-out;
     min-width: 0;
 
@@ -746,6 +819,28 @@ const getStyles = (theme: GrafanaTheme2) => {
 
   const filterButtonActive = css`
     opacity: 1;
+    pointer-events: auto;
+    background: ${theme.colors.action.hover};
+    color: ${theme.colors.text.maxContrast};
+  `;
+
+  const sortButton = css`
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease-in-out;
+    min-width: 0;
+
+    &:focus,
+    &:focus-visible,
+    &:hover {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  `;
+
+  const sortButtonActive = css`
+    opacity: 1;
+    pointer-events: auto;
     background: ${theme.colors.action.hover};
     color: ${theme.colors.text.maxContrast};
   `;
@@ -836,6 +931,14 @@ const getStyles = (theme: GrafanaTheme2) => {
       display: flex;
       align-items: center;
       gap: ${theme.spacing(0.5)};
+
+      &:hover .${filterButton},
+      &:hover .${sortButton},
+      &:focus-within .${filterButton},
+      &:focus-within .${sortButton} {
+        opacity: 1;
+        pointer-events: auto;
+      }
     `,
     headerLabel: css`
       flex: 1 1 auto;
@@ -843,8 +946,17 @@ const getStyles = (theme: GrafanaTheme2) => {
       overflow: hidden;
       text-overflow: ellipsis;
     `,
+    headerActions: css`
+      display: inline-flex;
+      align-items: center;
+      gap: ${theme.spacing(0.5)};
+      position: relative;
+      flex-shrink: 0;
+    `,
     filterButton,
     filterButtonActive,
+    sortButton,
+    sortButtonActive,
     filterPopover: css`
       position: absolute;
       top: calc(100% - ${theme.spacing(0.5)});

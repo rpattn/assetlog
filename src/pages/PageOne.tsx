@@ -12,6 +12,7 @@ import type {
   AssetFilterKey,
   AssetListFilters,
   AssetListMeta,
+  AssetListSort,
   AssetPayload,
   AssetRecord,
 } from '../types/assets';
@@ -54,18 +55,21 @@ function PageOne() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [filters, setFilters] = useState<AssetListFilters>({});
+  const [sort, setSort] = useState<AssetListSort | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
 
   const filterParams = useMemo<AssetListFilters>(() => normalizeFilterState(filters), [filters]);
 
   const filterKey = useMemo(() => JSON.stringify(filterParams), [filterParams]);
 
+  const sortKey = useMemo(() => (sort ? `${sort.key}:${sort.direction}` : ''), [sort]);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
 
-    fetchAssets({ page, pageSize, filters: filterParams })
+    fetchAssets({ page, pageSize, filters: filterParams, sort })
       .then(({ assets: records, meta: listMeta }) => {
         if (!cancelled) {
           setAssets(records);
@@ -80,6 +84,8 @@ function PageOne() {
           }
           const nextFilters = normalizeFilterState(listMeta?.filters);
           setFilters((prev) => (shallowEqualFilters(prev, nextFilters) ? prev : nextFilters));
+          const nextSort = listMeta?.sort ?? null;
+          setSort((prev) => (areSortsEqual(prev, nextSort) ? prev : nextSort));
           setLoading(false);
         }
       })
@@ -93,7 +99,7 @@ function PageOne() {
     return () => {
       cancelled = true;
     };
-  }, [page, pageSize, filterKey, refreshToken]);
+  }, [page, pageSize, filterKey, sortKey, refreshToken]);
 
   const openCreate = () => {
     setModalState({ mode: 'create' });
@@ -225,6 +231,11 @@ function PageOne() {
     setPage(1);
   }, []);
 
+  const handleSortChange = useCallback((next: AssetListSort | null) => {
+    setSort((prev) => (areSortsEqual(prev, next) ? prev : next));
+    setPage(1);
+  }, []);
+
   const handlePageChange = useCallback((nextPage: number) => {
     if (!Number.isFinite(nextPage) || nextPage < 1) {
       return;
@@ -282,20 +293,22 @@ function PageOne() {
 
         {!loading && !error && (
           <>
-            <AssetTable
-              assets={assets}
-              onEdit={openEdit}
-              onDelete={requestDelete}
-              testId={testIds.pageOne.table}
-              page={activePage}
-              pageSize={activePageSize}
-              pageCount={pageCount}
-              totalCount={totalCount}
-              filters={filters}
-              onFiltersChange={handleFiltersChange}
-              onPageChange={handlePageChange}
-              onPageSizeChange={handlePageSizeChange}
-            />
+          <AssetTable
+            assets={assets}
+            onEdit={openEdit}
+            onDelete={requestDelete}
+            testId={testIds.pageOne.table}
+            page={activePage}
+            pageSize={activePageSize}
+            pageCount={pageCount}
+            totalCount={totalCount}
+            filters={filters}
+            onFiltersChange={handleFiltersChange}
+            sort={sort}
+            onSortChange={handleSortChange}
+            onPageChange={handlePageChange}
+            onPageSizeChange={handlePageSizeChange}
+          />
             {assets.length === 0 && (
               <Alert title="No assets" severity="info" data-testid={testIds.pageOne.emptyState}>
                 {hasActiveFilters ? 'No assets match the selected filters.' : 'No assets found for your organization.'}
@@ -402,6 +415,16 @@ function shallowEqualFilters(a?: AssetListFilters, b?: AssetListFilters): boolea
     }
   }
   return true;
+}
+
+function areSortsEqual(a?: AssetListSort | null, b?: AssetListSort | null): boolean {
+  if (!a && !b) {
+    return true;
+  }
+  if (!a || !b) {
+    return false;
+  }
+  return a.key === b.key && a.direction === b.direction;
 }
 
 function normalizeFilterState(filters?: AssetListFilters): AssetListFilters {

@@ -44,6 +44,30 @@ var assetFilterColumns = map[string]string{
 	"service":            "service",
 }
 
+var assetSortColumns = map[string]string{
+	"title":              "title",
+	"entry_date":         "entry_date",
+	"commissioning_date": "commissioning_date",
+	"station_name":       "station_name",
+	"technician":         "technician",
+	"service":            "service",
+	"start_date":         "start_date",
+	"end_date":           "end_date",
+}
+
+type AssetSortDirection string
+
+const (
+	sortDirectionAsc  AssetSortDirection = "asc"
+	sortDirectionDesc AssetSortDirection = "desc"
+)
+
+type AssetListSort struct {
+	Key       string             `json:"key"`
+	Direction AssetSortDirection `json:"direction"`
+	column    string             `json:"-"`
+}
+
 type AssetRecord struct {
 	ID                int64       `json:"id"`
 	Title             string      `json:"title"`
@@ -142,6 +166,7 @@ type AssetListOptions struct {
 	Page     int
 	PageSize int
 	Filters  map[string][]string
+	Sort     *AssetListSort
 }
 
 type AssetListResult struct {
@@ -151,6 +176,7 @@ type AssetListResult struct {
 	PageSize       int
 	PageCount      int
 	AppliedFilters map[string][]string
+	AppliedSort    *AssetListSort
 }
 
 func (opts *AssetListOptions) normalize() {
@@ -165,6 +191,27 @@ func (opts *AssetListOptions) normalize() {
 	}
 	if opts.Filters == nil {
 		opts.Filters = map[string][]string{}
+	}
+	if opts.Sort != nil {
+		key := strings.TrimSpace(opts.Sort.Key)
+		direction := strings.ToLower(strings.TrimSpace(string(opts.Sort.Direction)))
+		column, ok := assetSortColumns[key]
+		if !ok {
+			opts.Sort = nil
+		} else {
+			switch direction {
+			case string(sortDirectionAsc):
+				opts.Sort.Direction = sortDirectionAsc
+			case string(sortDirectionDesc):
+				opts.Sort.Direction = sortDirectionDesc
+			default:
+				opts.Sort = nil
+			}
+			if opts.Sort != nil {
+				opts.Sort.Key = key
+				opts.Sort.column = column
+			}
+		}
 	}
 }
 
@@ -250,7 +297,20 @@ func (a *App) listAssets(ctx context.Context, orgID int64, opts AssetListOptions
 	offset := (page - 1) * opts.PageSize
 	queryArgs := append(append([]interface{}{}, args...), opts.PageSize, offset)
 
-	rows, err := a.db.QueryContext(ctx, fmt.Sprintf(`SELECT id, title, entry_date, commissioning_date, station_name, technician, start_date, end_date, service, staff, latitude, longitude, pitch, roll, created_at, updated_at FROM assets WHERE %s ORDER BY entry_date DESC, id DESC LIMIT ? OFFSET ?`, whereClause), queryArgs...)
+	orderParts := make([]string, 0, 2)
+	if opts.Sort != nil {
+		direction := "ASC"
+		if opts.Sort.Direction == sortDirectionDesc {
+			direction = "DESC"
+		}
+		orderParts = append(orderParts, fmt.Sprintf("%s %s", opts.Sort.column, direction))
+	} else {
+		orderParts = append(orderParts, "entry_date DESC")
+	}
+	orderParts = append(orderParts, "id DESC")
+	orderClause := strings.Join(orderParts, ", ")
+
+	rows, err := a.db.QueryContext(ctx, fmt.Sprintf(`SELECT id, title, entry_date, commissioning_date, station_name, technician, start_date, end_date, service, staff, latitude, longitude, pitch, roll, created_at, updated_at FROM assets WHERE %s ORDER BY %s LIMIT ? OFFSET ?`, whereClause, orderClause), queryArgs...)
 	if err != nil {
 		return AssetListResult{}, err
 	}
@@ -303,6 +363,11 @@ func (a *App) listAssets(ctx context.Context, orgID int64, opts AssetListOptions
 		pageCount = int((total + int64(opts.PageSize) - 1) / int64(opts.PageSize))
 	}
 
+	var appliedSort *AssetListSort
+	if opts.Sort != nil {
+		appliedSort = &AssetListSort{Key: opts.Sort.Key, Direction: opts.Sort.Direction}
+	}
+
 	return AssetListResult{
 		Records:        assets,
 		TotalCount:     total,
@@ -310,6 +375,7 @@ func (a *App) listAssets(ctx context.Context, orgID int64, opts AssetListOptions
 		PageSize:       opts.PageSize,
 		PageCount:      pageCount,
 		AppliedFilters: appliedFilters,
+		AppliedSort:    appliedSort,
 	}, nil
 }
 

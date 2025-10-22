@@ -4,6 +4,7 @@ import type {
   AssetFilterKey,
   AssetListFilters,
   AssetListMeta,
+  AssetListSort,
   AssetPayload,
   AssetRecord,
 } from '../types/assets';
@@ -30,6 +31,7 @@ export interface AssetListQuery {
   page?: number;
   pageSize?: number;
   filters?: AssetListFilters;
+  sort?: AssetListSort | null;
 }
 
 export async function fetchAssets(query?: AssetListQuery): Promise<AssetListResult> {
@@ -44,6 +46,7 @@ export async function fetchAssets(query?: AssetListQuery): Promise<AssetListResu
   const response = await backend.get<ListResponse>(url, undefined, undefined, { showErrorAlert: false });
   const meta: AssetListMeta = response?.meta ?? getDefaultMeta();
   meta.filters = normalizeFilters(meta.filters);
+  meta.sort = normalizeSort(meta.sort);
   return {
     assets: response?.data ?? [],
     meta,
@@ -188,6 +191,9 @@ function buildListURL(query?: AssetListQuery): string {
       }
     });
   }
+  if (query.sort && query.sort.key && query.sort.direction) {
+    params.set('sort', `${query.sort.key}:${query.sort.direction}`);
+  }
   const queryString = params.toString();
   if (!queryString) {
     return BASE_URL;
@@ -205,6 +211,7 @@ function getDefaultMeta(): AssetListMeta {
     pageCount: 0,
     totalCount: 0,
     filters: {},
+    sort: null,
   };
 }
 
@@ -234,6 +241,18 @@ function normalizeFilters(filters?: Record<string, string | string[] | undefined
     result[key as AssetFilterKey] = normalized;
   });
   return result;
+}
+
+function normalizeSort(sort?: AssetListSort | null): AssetListSort | null {
+  if (!sort) {
+    return null;
+  }
+  const key = sort.key;
+  const direction = sort.direction === 'asc' ? 'asc' : sort.direction === 'desc' ? 'desc' : null;
+  if (!key || !direction) {
+    return null;
+  }
+  return { key, direction };
 }
 
 function normalizeFilterArray(values: string[]): string[] {
