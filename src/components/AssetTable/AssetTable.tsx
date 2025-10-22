@@ -727,21 +727,18 @@ const getStyles = (theme: GrafanaTheme2) => {
   const border = `1px solid ${theme.colors.border.weak}`;
   const filterButton = css`
     opacity: 0;
-    visibility: hidden;
     pointer-events: none;
     transition: opacity 0.15s ease-in-out;
     min-width: 0;
 
     &:focus-visible {
       opacity: 1;
-      visibility: visible;
       pointer-events: auto;
     }
   `;
 
   const filterButtonVisible = css`
     opacity: 1 !important;
-    visibility: visible !important;
     pointer-events: auto !important;
   `;
 
@@ -844,7 +841,6 @@ const getStyles = (theme: GrafanaTheme2) => {
       &:hover .${filterButton},
       &:focus-within .${filterButton} {
         opacity: 1;
-        visibility: visible;
         pointer-events: auto;
       }
     `,
