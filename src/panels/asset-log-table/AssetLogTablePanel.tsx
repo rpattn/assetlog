@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2, PanelProps } from '@grafana/data';
+import type { ScopedVar, ScopedVars } from '@grafana/data';
 import { useStyles2, Alert, Spinner, Button } from '@grafana/ui';
 
 import type {
@@ -24,7 +25,8 @@ export const AssetLogTablePanel: React.FC<PanelProps<AssetLogTableOptions>> = ({
   const [error, setError] = useState<string | null>(null);
   const [manualReload, setManualReload] = useState(0);
 
-  const filters = useMemo(() => buildFilters(options.filters), [options.filters]);
+  const scopedVars = data?.request?.scopedVars;
+  const filters = useMemo(() => buildFilters(options.filters, scopedVars), [options.filters, scopedVars]);
   const sort = useMemo(() => buildSort(options.sortKey, options.sortDirection), [options.sortKey, options.sortDirection]);
   const maxItems = useMemo(() => sanitizeMaxItems(options.maxItems), [options.maxItems]);
   const requestId = data?.request?.requestId;
@@ -133,14 +135,24 @@ const sanitizeMaxItems = (value: number | undefined) => {
   return normalized;
 };
 
-function buildFilters(filters?: AssetLogTableOptions['filters']): AssetListFilters | undefined {
-  if (!filters) {
-    return undefined;
+function buildFilters(
+  filters?: AssetLogTableOptions['filters'],
+  scopedVars?: ScopedVars
+): AssetListFilters | undefined {
+  const normalized: AssetListFilters = {};
+
+  if (filters) {
+    (Object.entries(filters) as [AssetFilterKey, string | undefined][]).forEach(([key, raw]) => {
+      const values = parseFilterValues(raw);
+      if (!values || values.length === 0) {
+        return;
+      }
+      normalized[key] = values;
+    });
   }
 
-  const normalized: AssetListFilters = {};
-  (Object.entries(filters) as [AssetFilterKey, string | undefined][]).forEach(([key, raw]) => {
-    const values = parseFilterValues(raw);
+  const variableFilters = buildScopedVarFilters(scopedVars);
+  (Object.entries(variableFilters) as [AssetFilterKey, string[]][]).forEach(([key, values]) => {
     if (!values || values.length === 0) {
       return;
     }
@@ -209,6 +221,105 @@ function compareFilterValue(a: string, b: string): number {
     return -1;
   }
   return a.localeCompare(b, undefined, { sensitivity: 'base' });
+}
+
+const FILTER_KEYS: AssetFilterKey[] = [
+  'title',
+  'entry_date',
+  'commissioning_date',
+  'station_name',
+  'technician',
+  'service',
+];
+
+function buildScopedVarFilters(scopedVars?: ScopedVars): AssetListFilters {
+  const normalized: AssetListFilters = {};
+  if (!scopedVars) {
+    return normalized;
+  }
+
+  FILTER_KEYS.forEach((key) => {
+    const values = normalizeScopedVar(scopedVars[key]);
+    if (values && values.length > 0) {
+      normalized[key] = values;
+    }
+  });
+
+  return normalized;
+}
+
+function normalizeScopedVar(scoped?: ScopedVar): string[] | undefined {
+  if (!scoped) {
+    return undefined;
+  }
+
+  const seen = new Set<string>();
+
+  const addToken = (token: string) => {
+    const trimmed = token.trim();
+    if (trimmed === '' || isAllToken(trimmed)) {
+      return;
+    }
+
+    const normalized = normalizeFilterToken(trimmed);
+    if (normalized === '' || isAllToken(normalized)) {
+      return;
+    }
+
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+    }
+  };
+
+  const append = (raw: unknown) => {
+    if (raw === null || raw === undefined) {
+      return;
+    }
+
+    if (Array.isArray(raw)) {
+      raw.forEach(append);
+      return;
+    }
+
+    if (typeof raw === 'object') {
+      const candidate = raw as { value?: unknown; text?: unknown };
+      if ('value' in candidate && candidate.value !== undefined) {
+        append(candidate.value);
+        return;
+      }
+      if ('text' in candidate && candidate.text !== undefined) {
+        append(candidate.text);
+        return;
+      }
+    }
+
+    addToken(String(raw));
+  };
+
+  append(scoped.value);
+  if (seen.size === 0) {
+    append(scoped.text);
+  }
+
+  if (seen.size === 0) {
+    return undefined;
+  }
+
+  const values = Array.from(seen);
+  values.sort(compareFilterValue);
+  return values;
+}
+
+function isAllToken(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return (
+    normalized === '$__all' ||
+    normalized === '__all' ||
+    normalized === 'all' ||
+    normalized === '(all)' ||
+    normalized === '[all]' ||
+    normalized === '*'
+  );
 }
 
 function buildSort(sortKey?: AssetSortKey | '', sortDirection?: AssetSortDirection): AssetListSort {
