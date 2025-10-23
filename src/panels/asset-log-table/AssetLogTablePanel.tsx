@@ -1,7 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2, PanelProps } from '@grafana/data';
+import type { ScopedVar, ScopedVars, TypedVariableModel } from '@grafana/data';
 import { useStyles2, Alert, Spinner, Button } from '@grafana/ui';
+import { getTemplateSrv } from '@grafana/runtime';
+import type { TemplateSrv } from '@grafana/runtime';
 
 import type {
   AssetFilterKey,
@@ -24,7 +27,12 @@ export const AssetLogTablePanel: React.FC<PanelProps<AssetLogTableOptions>> = ({
   const [error, setError] = useState<string | null>(null);
   const [manualReload, setManualReload] = useState(0);
 
-  const filters = useMemo(() => buildFilters(options.filters), [options.filters]);
+  const scopedVars = data?.request?.scopedVars;
+  const templateFiltersSnapshot = readTemplateVariableFilters();
+  const filters = useMemo(
+    () => buildFilters(options.filters, scopedVars, templateFiltersSnapshot.filters),
+    [options.filters, scopedVars, templateFiltersSnapshot.signature]
+  );
   const sort = useMemo(() => buildSort(options.sortKey, options.sortDirection), [options.sortKey, options.sortDirection]);
   const maxItems = useMemo(() => sanitizeMaxItems(options.maxItems), [options.maxItems]);
   const requestId = data?.request?.requestId;
@@ -133,21 +141,40 @@ const sanitizeMaxItems = (value: number | undefined) => {
   return normalized;
 };
 
-function buildFilters(filters?: AssetLogTableOptions['filters']): AssetListFilters | undefined {
-  if (!filters) {
-    return undefined;
+function buildFilters(
+  filters?: AssetLogTableOptions['filters'],
+  scopedVars?: ScopedVars,
+  templateFilters?: AssetListFilters
+): AssetListFilters | undefined {
+  const normalized: AssetListFilters = {};
+
+  if (filters) {
+    (Object.entries(filters) as [AssetFilterKey, string | undefined][]).forEach(([key, raw]) => {
+      const values = parseFilterValues(raw);
+      if (!values || values.length === 0) {
+        return;
+      }
+      normalized[key] = values;
+    });
   }
 
-  const normalized: AssetListFilters = {};
-  (Object.entries(filters) as [AssetFilterKey, string | undefined][]).forEach(([key, raw]) => {
-    const values = parseFilterValues(raw);
+  mergeFilters(normalized, buildScopedVarFilters(scopedVars));
+  mergeFilters(normalized, templateFilters);
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function mergeFilters(target: AssetListFilters, source?: AssetListFilters) {
+  if (!source) {
+    return;
+  }
+
+  (Object.entries(source) as [AssetFilterKey, string[]][]).forEach(([key, values]) => {
     if (!values || values.length === 0) {
       return;
     }
-    normalized[key] = values;
+    target[key] = values;
   });
-
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 function parseFilterValues(value?: string): string[] | undefined {
@@ -209,6 +236,192 @@ function compareFilterValue(a: string, b: string): number {
     return -1;
   }
   return a.localeCompare(b, undefined, { sensitivity: 'base' });
+}
+
+const FILTER_KEYS: AssetFilterKey[] = [
+  'title',
+  'entry_date',
+  'commissioning_date',
+  'station_name',
+  'technician',
+  'service',
+];
+const FILTER_KEY_SET = new Set<string>(FILTER_KEYS);
+const EMPTY_TEMPLATE_FILTERS = Object.freeze({}) as AssetListFilters;
+
+type TemplateFiltersSnapshot = {
+  filters: AssetListFilters;
+  signature: string;
+};
+
+const EMPTY_TEMPLATE_SNAPSHOT: TemplateFiltersSnapshot = {
+  filters: EMPTY_TEMPLATE_FILTERS,
+  signature: '',
+};
+
+function buildScopedVarFilters(scopedVars?: ScopedVars): AssetListFilters {
+  const normalized: AssetListFilters = {};
+  if (!scopedVars) {
+    return normalized;
+  }
+
+  FILTER_KEYS.forEach((key) => {
+    const values = normalizeScopedVar(scopedVars[key]);
+    if (values && values.length > 0) {
+      normalized[key] = values;
+    }
+  });
+
+  return normalized;
+}
+
+function normalizeScopedVar(scoped?: ScopedVar): string[] | undefined {
+  if (!scoped) {
+    return undefined;
+  }
+
+  return normalizeVariableTokens(scoped.value, scoped.text);
+}
+
+function normalizeTemplateVariable(variable: TypedVariableModel): string[] | undefined {
+  if (!variable) {
+    return undefined;
+  }
+
+  const current = (variable as { current?: { value?: unknown; text?: unknown } }).current;
+  if (!current) {
+    return undefined;
+  }
+
+  return normalizeVariableTokens(current.value, current.text);
+}
+
+function normalizeVariableTokens(value: unknown, fallback?: unknown): string[] | undefined {
+  const seen = new Set<string>();
+
+  const addToken = (token: string) => {
+    const trimmed = token.trim();
+    if (trimmed === '' || isAllToken(trimmed)) {
+      return;
+    }
+
+    const normalized = normalizeFilterToken(trimmed);
+    if (normalized === '' || isAllToken(normalized)) {
+      return;
+    }
+
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+    }
+  };
+
+  const append = (raw: unknown) => {
+    if (raw === null || raw === undefined) {
+      return;
+    }
+
+    if (Array.isArray(raw)) {
+      raw.forEach(append);
+      return;
+    }
+
+    if (typeof raw === 'object') {
+      const candidate = raw as { value?: unknown; text?: unknown };
+      if ('value' in candidate && candidate.value !== undefined) {
+        append(candidate.value);
+        return;
+      }
+      if ('text' in candidate && candidate.text !== undefined) {
+        append(candidate.text);
+        return;
+      }
+    }
+
+    addToken(String(raw));
+  };
+
+  append(value);
+  if (seen.size === 0) {
+    append(fallback);
+  }
+
+  if (seen.size === 0) {
+    return undefined;
+  }
+
+  const values = Array.from(seen);
+  values.sort(compareFilterValue);
+  return values;
+}
+
+function readTemplateVariableFilters(): TemplateFiltersSnapshot {
+  const templateSrv = safeGetTemplateSrv();
+  if (!templateSrv || typeof templateSrv.getVariables !== 'function') {
+    return EMPTY_TEMPLATE_SNAPSHOT;
+  }
+
+  const variables = templateSrv.getVariables();
+  if (!Array.isArray(variables) || variables.length === 0) {
+    return EMPTY_TEMPLATE_SNAPSHOT;
+  }
+
+  const normalized: AssetListFilters = {};
+  const signatureParts: string[] = [];
+
+  variables.forEach((variable) => {
+    if (!variable || typeof variable !== 'object') {
+      return;
+    }
+
+    const name = (variable as { name?: unknown }).name;
+    if (typeof name !== 'string' || !isFilterKey(name)) {
+      return;
+    }
+
+    const values = normalizeTemplateVariable(variable as TypedVariableModel);
+    if (!values || values.length === 0) {
+      return;
+    }
+
+    const key = name as AssetFilterKey;
+    normalized[key] = values;
+    signatureParts.push(`${key}:${JSON.stringify(values)}`);
+  });
+
+  if (signatureParts.length === 0) {
+    return EMPTY_TEMPLATE_SNAPSHOT;
+  }
+
+  signatureParts.sort();
+
+  return {
+    filters: normalized,
+    signature: signatureParts.join(';'),
+  };
+}
+
+function isFilterKey(key: string): key is AssetFilterKey {
+  return FILTER_KEY_SET.has(key);
+}
+
+function safeGetTemplateSrv(): TemplateSrv | undefined {
+  try {
+    return getTemplateSrv();
+  } catch (error) {
+    return undefined;
+  }
+}
+
+function isAllToken(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return (
+    normalized === '$__all' ||
+    normalized === '__all' ||
+    normalized === 'all' ||
+    normalized === '(all)' ||
+    normalized === '[all]' ||
+    normalized === '*'
+  );
 }
 
 function buildSort(sortKey?: AssetSortKey | '', sortDirection?: AssetSortDirection): AssetListSort {
