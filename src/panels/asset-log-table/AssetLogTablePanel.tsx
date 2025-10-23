@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2, PanelProps } from '@grafana/data';
-import type { ScopedVar, ScopedVars } from '@grafana/data';
+import type { ScopedVar, ScopedVars, TypedVariableModel } from '@grafana/data';
 import { useStyles2, Alert, Spinner, Button } from '@grafana/ui';
+import { getTemplateSrv } from '@grafana/runtime';
+import type { TemplateSrv } from '@grafana/runtime';
 
 import type {
   AssetFilterKey,
@@ -26,7 +28,11 @@ export const AssetLogTablePanel: React.FC<PanelProps<AssetLogTableOptions>> = ({
   const [manualReload, setManualReload] = useState(0);
 
   const scopedVars = data?.request?.scopedVars;
-  const filters = useMemo(() => buildFilters(options.filters, scopedVars), [options.filters, scopedVars]);
+  const templateFiltersSnapshot = readTemplateVariableFilters();
+  const filters = useMemo(
+    () => buildFilters(options.filters, scopedVars, templateFiltersSnapshot.filters),
+    [options.filters, scopedVars, templateFiltersSnapshot.signature]
+  );
   const sort = useMemo(() => buildSort(options.sortKey, options.sortDirection), [options.sortKey, options.sortDirection]);
   const maxItems = useMemo(() => sanitizeMaxItems(options.maxItems), [options.maxItems]);
   const requestId = data?.request?.requestId;
@@ -137,7 +143,8 @@ const sanitizeMaxItems = (value: number | undefined) => {
 
 function buildFilters(
   filters?: AssetLogTableOptions['filters'],
-  scopedVars?: ScopedVars
+  scopedVars?: ScopedVars,
+  templateFilters?: AssetListFilters
 ): AssetListFilters | undefined {
   const normalized: AssetListFilters = {};
 
@@ -151,15 +158,23 @@ function buildFilters(
     });
   }
 
-  const variableFilters = buildScopedVarFilters(scopedVars);
-  (Object.entries(variableFilters) as [AssetFilterKey, string[]][]).forEach(([key, values]) => {
+  mergeFilters(normalized, buildScopedVarFilters(scopedVars));
+  mergeFilters(normalized, templateFilters);
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function mergeFilters(target: AssetListFilters, source?: AssetListFilters) {
+  if (!source) {
+    return;
+  }
+
+  (Object.entries(source) as [AssetFilterKey, string[]][]).forEach(([key, values]) => {
     if (!values || values.length === 0) {
       return;
     }
-    normalized[key] = values;
+    target[key] = values;
   });
-
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 function parseFilterValues(value?: string): string[] | undefined {
@@ -231,6 +246,18 @@ const FILTER_KEYS: AssetFilterKey[] = [
   'technician',
   'service',
 ];
+const FILTER_KEY_SET = new Set<string>(FILTER_KEYS);
+const EMPTY_TEMPLATE_FILTERS = Object.freeze({}) as AssetListFilters;
+
+type TemplateFiltersSnapshot = {
+  filters: AssetListFilters;
+  signature: string;
+};
+
+const EMPTY_TEMPLATE_SNAPSHOT: TemplateFiltersSnapshot = {
+  filters: EMPTY_TEMPLATE_FILTERS,
+  signature: '',
+};
 
 function buildScopedVarFilters(scopedVars?: ScopedVars): AssetListFilters {
   const normalized: AssetListFilters = {};
@@ -253,6 +280,23 @@ function normalizeScopedVar(scoped?: ScopedVar): string[] | undefined {
     return undefined;
   }
 
+  return normalizeVariableTokens(scoped.value, scoped.text);
+}
+
+function normalizeTemplateVariable(variable: TypedVariableModel): string[] | undefined {
+  if (!variable) {
+    return undefined;
+  }
+
+  const current = (variable as { current?: { value?: unknown; text?: unknown } }).current;
+  if (!current) {
+    return undefined;
+  }
+
+  return normalizeVariableTokens(current.value, current.text);
+}
+
+function normalizeVariableTokens(value: unknown, fallback?: unknown): string[] | undefined {
   const seen = new Set<string>();
 
   const addToken = (token: string) => {
@@ -296,9 +340,9 @@ function normalizeScopedVar(scoped?: ScopedVar): string[] | undefined {
     addToken(String(raw));
   };
 
-  append(scoped.value);
+  append(value);
   if (seen.size === 0) {
-    append(scoped.text);
+    append(fallback);
   }
 
   if (seen.size === 0) {
@@ -308,6 +352,64 @@ function normalizeScopedVar(scoped?: ScopedVar): string[] | undefined {
   const values = Array.from(seen);
   values.sort(compareFilterValue);
   return values;
+}
+
+function readTemplateVariableFilters(): TemplateFiltersSnapshot {
+  const templateSrv = safeGetTemplateSrv();
+  if (!templateSrv || typeof templateSrv.getVariables !== 'function') {
+    return EMPTY_TEMPLATE_SNAPSHOT;
+  }
+
+  const variables = templateSrv.getVariables();
+  if (!Array.isArray(variables) || variables.length === 0) {
+    return EMPTY_TEMPLATE_SNAPSHOT;
+  }
+
+  const normalized: AssetListFilters = {};
+  const signatureParts: string[] = [];
+
+  variables.forEach((variable) => {
+    if (!variable || typeof variable !== 'object') {
+      return;
+    }
+
+    const name = (variable as { name?: unknown }).name;
+    if (typeof name !== 'string' || !isFilterKey(name)) {
+      return;
+    }
+
+    const values = normalizeTemplateVariable(variable as TypedVariableModel);
+    if (!values || values.length === 0) {
+      return;
+    }
+
+    const key = name as AssetFilterKey;
+    normalized[key] = values;
+    signatureParts.push(`${key}:${JSON.stringify(values)}`);
+  });
+
+  if (signatureParts.length === 0) {
+    return EMPTY_TEMPLATE_SNAPSHOT;
+  }
+
+  signatureParts.sort();
+
+  return {
+    filters: normalized,
+    signature: signatureParts.join(';'),
+  };
+}
+
+function isFilterKey(key: string): key is AssetFilterKey {
+  return FILTER_KEY_SET.has(key);
+}
+
+function safeGetTemplateSrv(): TemplateSrv | undefined {
+  try {
+    return getTemplateSrv();
+  } catch (error) {
+    return undefined;
+  }
 }
 
 function isAllToken(value: string): boolean {
